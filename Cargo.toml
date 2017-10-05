@@ -8,6 +8,7 @@ lto = true
 panic = 'abort'
 
 [workspace]
+exclude = [ "fuzz" ]
 
 [dependencies]
 devices = { path = "devices" }

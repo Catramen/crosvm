@@ -1,0 +1,14 @@
+[package]
+name = "fuzz"
+version = "0.1.0"
+authors = ["Dylan Reid <dgreid@chromium.org>"]
+
+[dependencies]
+devices = { path = "../devices" }
+libc = "=0.2.32"
+sys_util = { path = "../sys_util" }
+
+[lib]
+name = "fuzz_serial"
+path = "src/fuzz_serial.rs"
+crate-type = ["staticlib"]
