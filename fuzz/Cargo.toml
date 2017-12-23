@@ -4,11 +4,11 @@ version = "0.1.0"
 authors = ["Dylan Reid <dgreid@chromium.org>"]
 
 [dependencies]
-devices = { path = "../devices" }
+kernel_loader = { path = "../kernel_loader" }
 libc = "=0.2.32"
 sys_util = { path = "../sys_util" }
 
 [lib]
-name = "fuzz_serial"
-path = "src/fuzz_serial.rs"
+name = "fuzz_kernel_loader"
+path = "src/fuzz_kernel_loader.rs"
 crate-type = ["staticlib"]
