@@ -15,9 +15,12 @@ use std::slice;
 
 
 fn fuzz_kernel_loader(data: &[u8]) {
-    let rdr = Cursor::new(data);
-    let mem = GuestMemory::new(&[GuestAddress(0), data.len() + 0x1000);
-    let _ = kernel_loader::load_kernel(&mem, GuestAddress(0), kimage);
+    let mut kimage = Cursor::new(data);
+    let mem = GuestMemory::new(&[(GuestAddress(0), data.len() + 0x1000)]).unwrap();
+    let result = kernel_loader::load_kernel(&mem, GuestAddress(0), &mut kimage);
+    if result.is_err() {
+        println!("Not a valid kernel");
+    }
 }
 
 #[no_mangle]
