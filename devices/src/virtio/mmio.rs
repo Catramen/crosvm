@@ -271,4 +271,8 @@ impl BusDevice for MmioDevice {
             }
         }
     }
+
+    fn keep_fds(&self) -> Vec<RawFd> {
+        self.device.keep_fds()
+    }
 }

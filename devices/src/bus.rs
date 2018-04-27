@@ -6,6 +6,7 @@
 
 use std::cmp::{Ord, PartialOrd, PartialEq, Ordering};
 use std::collections::btree_map::BTreeMap;
+use std::os::unix::io::RawFd;
 use std::result;
 use std::sync::{Arc, Mutex};
 
@@ -19,6 +20,9 @@ pub trait BusDevice: Send {
     fn read(&mut self, offset: u64, data: &mut [u8]) {}
     /// Writes at `offset` into this device
     fn write(&mut self, offset: u64, data: &[u8]) {}
+    /// A vector of device-specific file descriptors that must be kept open
+    /// after jailing. Must be called before the process is jailed.
+    fn keep_fds(&self) -> Vec<RawFd> { Vec::new() }
 }
 
 #[derive(Debug)]
