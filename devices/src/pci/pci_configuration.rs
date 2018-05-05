@@ -6,8 +6,10 @@ const NUM_CONFIGURATION_REGISTERS: usize = 16;
 
 const BAR0_REG: usize = 4;
 const BAR5_REG: usize = 9;
-const NUM_BAR_REGS: usize = 6;
+const BAR_IO_ADDR_MASK: u32 = 0xffff_fffc;
+const BAR_IO_BIT: u32 = 0x0000_0001;
 const BAR_MEM_ADDR_MASK: u32 = 0xffff_fff0;
+const NUM_BAR_REGS: usize = 6;
 
 /// Represents the types of PCI headers allowed in the configuration registers.
 pub enum PciHeaderType {
@@ -135,7 +137,7 @@ pub struct PciConfiguration {
 }
 
 impl PciConfiguration {
-    pub fn new(device_id: u16, vendor_id: u16, class_code: PciClassCode, subclass: &PciSubclass,
+    pub fn new(vendor_id: u16, device_id: u16, class_code: PciClassCode, subclass: &PciSubclass,
                header_type: PciHeaderType) -> Self {
         let mut registers = [0u32; NUM_CONFIGURATION_REGISTERS];
         registers[0] = (device_id as u32) << 16 | vendor_id as u32;
@@ -210,6 +212,33 @@ impl PciConfiguration {
         let bar_idx = BAR0_REG + self.num_bars;
 
         self.registers[bar_idx] = addr as u32 & BAR_MEM_ADDR_MASK;
+        // The first writable bit represents the size of the region.
+        self.writable_bits[bar_idx] = !(size - 1) as u32;
+
+        self.num_bars += 1;
+        Some(bar_idx)
+    }
+
+    /// Adds an IO region of `size` at `addr`. Configures the next available BAR register to
+    /// report this region and size to the guest kernel. Returns 'None' if all BARs are full, or
+    /// `Some(BarIndex)` on success. `size` must be a power of 2.
+    pub fn add_io_region(&mut self, addr: u64, size: u64) -> Option<usize> {
+        if self.num_bars >= NUM_BAR_REGS {
+            return None;
+        }
+        if size.count_ones() != 1 {
+            return None;
+        }
+
+        // TODO(dgreid) Allow 64 bit address and size.
+        match addr.checked_add(size) {
+            Some(a) => if a > u32::max_value() as u64 { return None; },
+            None => return None,
+        }
+
+        let bar_idx = BAR0_REG + self.num_bars;
+
+        self.registers[bar_idx] = addr as u32 & BAR_IO_ADDR_MASK | BAR_IO_BIT;
         // The first writable bit represents the size of the region.
         self.writable_bits[bar_idx] = !(size - 1) as u32;
 

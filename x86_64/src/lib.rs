@@ -322,7 +322,7 @@ impl arch::LinuxArch for X8664arch {
     /// * `mem` - A copy of the GuestMemory object for this VM.
     fn get_device_manager(vm: &mut Vm, mem: GuestMemory) ->
         Result<device_manager::DeviceManager> {
-        const MMIO_BASE: u64 = 0xd0000000;
+        const MMIO_BASE: u64 = 0xe0000000;
         const MMIO_LEN: u64 = 0x1000;
         const IRQ_BASE: u32 = 5;
 
