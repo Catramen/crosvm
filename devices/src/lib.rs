@@ -29,7 +29,7 @@ pub use self::bus::{Bus, BusDevice};
 pub use self::cmos::Cmos;
 pub use self::pl030::Pl030;
 pub use self::i8042::I8042Device;
-pub use self::pci::PciRoot;
+pub use self::pci::{Ac97, PciRoot};
 pub use self::proxy::ProxyDevice;
 pub use self::proxy::Error as ProxyError;
 pub use self::serial::Serial;
