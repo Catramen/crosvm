@@ -801,9 +801,13 @@ pub fn run_config(cfg: Config) -> Result<()> {
     let irq_chip = Arch::create_irq_chip(&vm).map_err(|e| Error::CreateIrqChip(e))?;
     let mut cmdline = Arch::get_base_linux_cmdline();
     let mut next_dev_pfn = Arch::get_base_dev_pfn(mem_size as u64);
+
+    let pci = devices::PciRoot::new();
+
     let (io_bus, stdio_serial) = Arch::setup_io_bus(&mut vm,
                                                     exit_evt.try_clone().
-                                                    map_err(Error::CloneEventFd)?).
+                                                    map_err(Error::CloneEventFd)?,
+                                                    Some(pci)).
         map_err(|e| Error::SetupIoBus(e))?;
 
     let (balloon_host_socket, balloon_device_socket) = UnixDatagram::pair()

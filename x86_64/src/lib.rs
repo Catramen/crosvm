@@ -335,7 +335,7 @@ impl arch::LinuxArch for X8664arch {
     ///
     /// * - `vm` the vm object
     /// * - `exit_evt` - the event fd object which should receive exit events
-    fn setup_io_bus(vm: &mut Vm, exit_evt: EventFd)
+    fn setup_io_bus(vm: &mut Vm, exit_evt: EventFd, pci: Option<devices::PciRoot>)
                     -> Result<(devices::Bus, Arc<Mutex<devices::Serial>>)> {
         struct NoDevice;
         impl devices::BusDevice for NoDevice {}
@@ -380,7 +380,13 @@ impl arch::LinuxArch for X8664arch {
         io_bus.insert(nul_device.clone(), 0x040, 0x8).unwrap(); // ignore pit
         io_bus.insert(nul_device.clone(), 0x0ed, 0x1).unwrap(); // most likely this one does nothing
         io_bus.insert(nul_device.clone(), 0x0f0, 0x2).unwrap(); // ignore fpu
-        io_bus.insert(nul_device.clone(), 0xcf8, 0x8).unwrap(); // ignore pci
+
+        if let Some(pci_root) = pci {
+            io_bus.insert(Arc::new(Mutex::new(pci_root)), 0xcf8, 0x8).unwrap();
+        } else {
+            // ignore pci.
+            io_bus.insert(nul_device.clone(), 0xcf8, 0x8).unwrap();
+        }
 
         vm.register_irqfd(&com_evt_1_3, 4).map_err(Error::RegisterIrqfd)?;
         vm.register_irqfd(&com_evt_2_4, 3).map_err(Error::RegisterIrqfd)?;

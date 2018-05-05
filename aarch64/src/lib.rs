@@ -325,7 +325,7 @@ impl arch::LinuxArch for AArch64 {
         Ok(Some(vgic_fd))
     }
 
-    fn setup_io_bus(_vm: &mut Vm, _exit_evt: EventFd)
+    fn setup_io_bus(_vm: &mut Vm, _exit_evt: EventFd, _pci: Option<devices::PciRoot>)
                     -> Result<(devices::Bus, Arc<Mutex<devices::Serial>>)> {
         // ARM doesn't really use the io bus like x86, instead we have a
         // separate serial device that is returned as a separate object.

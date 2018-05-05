@@ -91,7 +91,7 @@ pub trait LinuxArch {
     ///
     /// * - `vm` the vm object
     /// * - `exit_evt` - the event fd object which should receive exit events
-    fn setup_io_bus(vm: &mut Vm, exit_evt: EventFd)
+    fn setup_io_bus(vm: &mut Vm, exit_evt: EventFd, pci: Option<devices::PciRoot>)
                     -> Result<(devices::Bus, Arc<Mutex<devices::Serial>>)>;
 
     /// Configures the vcpu and should be called once per vcpu from the vcpu's thread.
