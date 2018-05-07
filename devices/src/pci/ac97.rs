@@ -20,8 +20,8 @@ impl Ac97 {
                                                     PciClassCode::MultimediaController,
                                                     &PciMultimediaSubclass::AudioDevice,
                                                     PciHeaderType::Device);
-        config_regs.add_io_region(0x0000_0000, 0x0000_0100).unwrap();
-        config_regs.add_io_region(0x0000_0400, 0x0000_0400).unwrap();
+        config_regs.add_io_region(0x0000_1000, 0x0000_0100).unwrap();
+        config_regs.add_io_region(0x0000_1400, 0x0000_0400).unwrap();
 
         Ac97 {
             config_regs
