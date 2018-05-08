@@ -36,6 +36,18 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug, Copy, Clone)]
 struct BusRange(u64, u64);
 
+impl BusRange {
+    /// Returns true if `addr` is within the range.
+    pub fn contains(&self, addr: u64) -> bool {
+        self.0 <= addr && addr < self.0 + self.1
+    }
+
+    /// Returns true if there is overlap with the given range.
+    pub fn overlaps(&self, base: u64, len: u64) -> bool {
+        self.0 < (base + len) && base < self.0 + self.1
+    }
+}
+
 impl Eq for BusRange {}
 
 impl PartialEq for BusRange {
@@ -56,36 +68,39 @@ impl PartialOrd for BusRange {
     }
 }
 
+// Holds a device and the memory ranges that access it.
+#[derive(Clone)]
+struct BusItem {
+    device: Arc<Mutex<BusDevice>>,
+    ranges: Vec<BusRange>,
+}
+
+impl BusItem {
+    /// Returns `Some(offset)` if `addr` is contained in a range.
+    pub fn addr_offset(&self, addr: u64) -> Option<u64> {
+        self.ranges.iter().find(|r| r.contains(addr)).map(|r| addr - r.0)
+    }
+}
+
 /// A device container for routing reads and writes over some address space.
 ///
 /// This doesn't have any restrictions on what kind of device or address space this applies to. The
 /// only restriction is that no two devices can overlap in this address space.
 #[derive(Clone)]
 pub struct Bus {
-    devices: BTreeMap<BusRange, Arc<Mutex<BusDevice>>>,
+    devices: Vec<BusItem>,
 }
 
 impl Bus {
     /// Constructs an a bus with an empty address space.
     pub fn new() -> Bus {
-        Bus { devices: BTreeMap::new() }
-    }
-
-    fn first_before(&self, addr: u64) -> Option<(BusRange, &Mutex<BusDevice>)> {
-        // for when we switch to rustc 1.17: self.devices.range(..addr).iter().rev().next()
-        for (range, dev) in self.devices.iter().rev() {
-            if range.0 <= addr {
-                return Some((*range, dev));
-            }
-        }
-        None
+        Bus { devices: Vec::new() }
     }
 
     fn get_device(&self, addr: u64) -> Option<(u64, &Mutex<BusDevice>)> {
-        if let Some((BusRange(start, len), dev)) = self.first_before(addr) {
-            let offset = addr - start;
-            if offset < len {
-                return Some((offset, dev));
+        for item in &self.devices {
+            if let Some(offset) = item.addr_offset(addr) {
+                return Some((offset, &item.device));
             }
         }
         None
@@ -97,28 +112,14 @@ impl Bus {
             return Err(Error::Overlap);
         }
 
-        // Reject all cases where the new device's base is within an old device's range.
-        if self.get_device(base).is_some() {
-            return Err(Error::Overlap);
-        }
-
-        // The above check will miss an overlap in which the new device's base address is before the
-        // range of another device. To catch that case, we search for a device with a range before
-        // the new device's range's end. If there is no existing device in that range that starts
-        // after the new device, then there will be no overlap.
-        if let Some((BusRange(start, _), _)) = self.first_before(base + len - 1) {
-            // Such a device only conflicts with the new device if it also starts after the new
-            // device because of our initial `get_device` check above.
-            if start >= base {
+        // Reject all cases where the new device's range overlaps with an existing device.
+        for item in &self.devices {
+            if item.ranges.iter().any(|r| r.overlaps(base, len)) {
                 return Err(Error::Overlap);
             }
         }
 
-        if self.devices
-               .insert(BusRange(base, len), device)
-               .is_some() {
-            return Err(Error::Overlap);
-        }
+        self.devices.push(BusItem { device, ranges: vec![BusRange(base, len)] });
 
         Ok(())
     }
