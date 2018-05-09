@@ -23,6 +23,9 @@ pub trait BusDevice: Send {
     /// A vector of device-specific file descriptors that must be kept open
     /// after jailing. Must be called before the process is jailed.
     fn keep_fds(&self) -> Vec<RawFd> { Vec::new() }
+    /// Returns a reference to the child device that owns `addr` and the offset of addr in that
+    /// device, if one exists.
+    fn child_dev(&self, addr: u64) -> Option<(u64, Arc<Mutex<BusDevice>>)> { None }
 }
 
 #[derive(Debug)]
@@ -97,10 +100,15 @@ impl Bus {
         Bus { devices: Vec::new() }
     }
 
-    fn get_device(&self, addr: u64) -> Option<(u64, &Mutex<BusDevice>)> {
+    fn get_device(&self, addr: u64) -> Option<(u64, Arc<Mutex<BusDevice>>)> {
         for item in &self.devices {
             if let Some(offset) = item.addr_offset(addr) {
-                return Some((offset, &item.device));
+                return Some((offset, item.device.clone()));
+            }
+            // Check if the device is nested under this item as it could be a bus such as PCI.
+            let dev = item.device.lock().unwrap();
+            if let Some((offset, device)) = dev.child_dev(addr) {
+                return Some((offset, device.clone()));
             }
         }
         None

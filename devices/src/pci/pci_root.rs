@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::sync::{Arc, Mutex};
+
 use BusDevice;
+use Ac97;
 
 use pci::pci_configuration::{PciBridgeSubclass, PciClassCode, PciConfiguration, PciHeaderType};
 use pci::pci_device::PciDevice;
@@ -34,7 +37,7 @@ pub struct PciRoot {
     /// Current address to read/write from (0xcf8 register, litte endian).
     config_address: u32,
     /// Devices attached to this bridge's bus.
-    devices: Vec<Box<PciDevice>>,
+    devices: Vec<Arc<Mutex<PciDevice>>>,
 }
 
 impl PciRoot {
@@ -51,7 +54,7 @@ impl PciRoot {
     }
 
     /// Add a `PciDevice` to this root PCI bus.
-    pub fn add_device(&mut self, device: Box<PciDevice>) {
+    pub fn add_device(&mut self, device: Arc<Mutex<PciDevice>>) {
         self.devices.push(device);
     }
 
@@ -71,7 +74,7 @@ impl PciRoot {
             dev_num => {
                 self.devices.get(dev_num - 1)
                             .map_or(0xffff_ffff,
-                                    |d| d.config_registers().read_reg(register))
+                                    |d| d.lock().unwrap().config_registers().read_reg(register))
             }
         }
     }
@@ -96,7 +99,7 @@ impl PciRoot {
             dev_num => {
                 // dev_num is 1-indexed here.
                 match self.devices.get_mut(dev_num - 1) {
-                    Some(r) => r.config_registers_mut(),
+                    Some(r) => r.lock().unwrap().config_registers_mut(),
                     None => return,
                 }
             }
@@ -155,6 +158,15 @@ impl BusDevice for PciRoot {
             o @ 4...7 => self.config_space_write(o - 4, data),
             _ => (),
         };
+    }
+
+    fn child_dev(&self, addr: u64) -> Option<(u64, Arc<Mutex<BusDevice>>)> {
+        for d in self.devices.iter() {
+            if let Some(offset) = d.lock().unwrap().bar_offset(addr) {
+                return Some((offset, d.clone()));
+            }
+        }
+        None
     }
 }
 
