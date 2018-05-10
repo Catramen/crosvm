@@ -803,7 +803,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
     let mut next_dev_pfn = Arch::get_base_dev_pfn(mem_size as u64);
 
     let mut pci = devices::PciRoot::new();
-    pci.add_device(Box::new(devices::Ac97::new()));
+    pci.add_device(Box::new(devices::Ac97Dev::new()));
 
     let (io_bus, stdio_serial) = Arch::setup_io_bus(&mut vm,
                                                     exit_evt.try_clone().

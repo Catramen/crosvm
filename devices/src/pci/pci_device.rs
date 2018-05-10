@@ -3,19 +3,15 @@
 // found in the LICENSE file.
 
 use std::ops::Deref;
+use std::sync::{Arc, Mutex};
 
 use BusDevice;
 
 use pci::pci_configuration::{PciConfiguration, PciHeaderType};
 
-pub struct BarRange {
-    pub addr: u64,
-    pub len: u64,
-}
-
-pub trait PciDevice : BusDevice + Send + Sync {
-    /// Returns the offset of `addr` in to a BAR region is a bar region contains `addr`.
-    fn bar_offset(&self, addr: u64) -> Option<u64>;
+pub trait PciDevice : Send + Sync {
+    /// Returns the offset of `addr` in to a BAR region and the bar region that contains `addr`.
+    fn bar_region(&self, addr: u64) -> Option<(u64, Arc<Mutex<BusDevice>>)>;
     /// Gets the configuration registers of the Pci Device.
     fn config_registers(&self) -> &PciConfiguration;
     /// Gets the configuration registers of the Pci Device for modification.

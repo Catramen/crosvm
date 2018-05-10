@@ -10,4 +10,4 @@ mod pci_device;
 mod pci_root;
 
 pub use self::pci_root::PciRoot;
-pub use self::ac97::Ac97;
+pub use self::ac97::Ac97Dev;
