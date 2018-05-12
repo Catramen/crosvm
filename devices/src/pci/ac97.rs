@@ -56,6 +56,9 @@ impl PciDevice for Ac97Dev {
     fn config_registers_mut(&mut self) -> &mut PciConfiguration {
         &mut self.config_regs
     }
+
+    fn get_irq_num(&self) -> u32 {
+    }
 }
 
 struct Ac97Mixer {
