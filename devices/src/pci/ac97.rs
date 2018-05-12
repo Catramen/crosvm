@@ -9,6 +9,7 @@ use BusDevice;
 
 use pci::pci_configuration::{PciClassCode, PciConfiguration, PciHeaderType, PciMultimediaSubclass};
 use pci::pci_device::PciDevice;
+use sys_util::EventFd;
 
 // Use 82801AA because it's what qemu does.
 const PCI_DEVICE_ID_INTEL_82801AA_5: u16 = 0x2415;
@@ -21,7 +22,7 @@ pub struct Ac97Dev {
 }
 
 impl Ac97Dev {
-    pub fn new() -> Self {
+    pub fn new(irq_evt: EventFd, irq_num: u32) -> Self {
         let mut config_regs = PciConfiguration::new(0x8086,
                                                     PCI_DEVICE_ID_INTEL_82801AA_5,
                                                     PciClassCode::MultimediaController,

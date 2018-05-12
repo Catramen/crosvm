@@ -324,7 +324,7 @@ impl arch::LinuxArch for X8664arch {
         Result<device_manager::DeviceManager> {
         const MMIO_BASE: u64 = 0xe0000000;
         const MMIO_LEN: u64 = 0x1000;
-        const IRQ_BASE: u32 = 5;
+        const IRQ_BASE: u32 = 6;
 
         Ok(device_manager::DeviceManager::new(vm, mem, MMIO_LEN, MMIO_BASE, IRQ_BASE))
     }

@@ -18,6 +18,7 @@ pub enum PciHeaderType {
 }
 
 /// Classes of PCI nodes.
+#[allow(dead_code)]
 pub enum PciClassCode {
     TooOld,
     MassStorage,
@@ -72,6 +73,7 @@ pub trait PciSubclass {
 }
 
 /// Subclasses of the MultimediaController class.
+#[allow(dead_code)]
 pub enum PciMultimediaSubclass {
     VideoController,
     AudioController,
@@ -93,6 +95,7 @@ impl PciSubclass for PciMultimediaSubclass {
 }
 
 /// Subclasses of the BridgeDevice
+#[allow(dead_code)]
 pub enum PciBridgeSubclass {
     HostBridge,
     IsaBridge,
