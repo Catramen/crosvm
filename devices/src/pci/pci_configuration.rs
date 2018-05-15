@@ -11,6 +11,9 @@ const BAR_IO_BIT: u32 = 0x0000_0001;
 const BAR_MEM_ADDR_MASK: u32 = 0xffff_fff0;
 const NUM_BAR_REGS: usize = 6;
 
+const INTERRUPT_LINE_PIN_REG: usize = 15;
+
+
 /// Represents the types of PCI headers allowed in the configuration registers.
 pub enum PciHeaderType {
     Device,
@@ -247,5 +250,12 @@ impl PciConfiguration {
 
         self.num_bars += 1;
         Some(bar_idx)
+    }
+
+    /// Configures the IRQ line and pin used by this device.
+    pub fn set_irq(&mut self, line: u8, pin:u8) {
+        self.registers[INTERRUPT_LINE_PIN_REG] =
+            (self.registers[INTERRUPT_LINE_PIN_REG] & 0xffff_0000) |
+                ((pin as u32) << 8) | line as u32;
     }
 }
