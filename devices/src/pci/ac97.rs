@@ -22,7 +22,7 @@ pub struct Ac97Dev {
 }
 
 impl Ac97Dev {
-    pub fn new(irq_evt: EventFd, irq_num: u32) -> Self {
+    pub fn new(irq_evt: EventFd, irq_num: u8) -> Self {
         let mut config_regs = PciConfiguration::new(0x8086,
                                                     PCI_DEVICE_ID_INTEL_82801AA_5,
                                                     PciClassCode::MultimediaController,
@@ -30,6 +30,7 @@ impl Ac97Dev {
                                                     PciHeaderType::Device);
         config_regs.add_io_region(0x1000, 0x0100).unwrap();
         config_regs.add_io_region(0x1400, 0x0400).unwrap();
+        config_regs.set_irq(irq_num, 1);
 
         let audio_function = Arc::new(Mutex::new(Ac97::new()));
         Ac97Dev {
