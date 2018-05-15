@@ -58,8 +58,8 @@ impl PciDevice for Ac97Dev {
         &mut self.config_regs
     }
 
-    fn get_irq_num(&self) -> u32 {
-    }
+//    fn get_irq_num(&self) -> u32 {
+ //   }
 }
 
 struct Ac97Mixer {
@@ -76,11 +76,11 @@ impl Ac97Mixer {
 
 impl BusDevice for Ac97Mixer {
     fn read(&mut self, offset: u64, data: &mut [u8]) {
-        println!("read from mixer");
+//        println!("read from mixer 0x{:x} {}", offset, data.len());
     }
 
     fn write(&mut self, offset: u64, data: &[u8]) {
-        println!("write to mixer");
+ //       println!("write to mixer 0x{:x} {}", offset, data.len());
     }
 }
 
@@ -123,17 +123,17 @@ impl Ac97BusMaster {
 // 34h ACC_SEMA Codec Write Semaphore Register
 impl BusDevice for Ac97BusMaster {
     fn read(&mut self, offset: u64, data: &mut [u8]) {
-        println!("read from BM 0x{:x} {}", offset, data.len());
+//        println!("read from BM 0x{:x} {}", offset, data.len());
         let mut af = self.audio_function.lock().unwrap();
         match data.len() {
-            1 => data[0] = af.readb(offset),
+            1 => data[0] = af.bm_readb(offset),
             2 => {
-                let val: u16 = af.readw(offset);
+                let val: u16 = af.bm_readw(offset);
                 data[0] = val as u8;
                 data[1] = (val >> 8) as u8;
             }
             4 => {
-                let val: u32 = af.readl(offset);
+                let val: u32 = af.bm_readl(offset);
                 data[0] = val as u8;
                 data[1] = (val >> 8) as u8;
                 data[2] = (val >> 16) as u8;
@@ -144,13 +144,13 @@ impl BusDevice for Ac97BusMaster {
     }
 
     fn write(&mut self, offset: u64, data: &[u8]) {
-        println!("write to BM 0x{:x} {}", offset, data.len());
+//        println!("write to BM 0x{:x} {}", offset, data.len());
         let mut af = self.audio_function.lock().unwrap();
         match data.len() {
-            1 => af.writeb(offset, data[0]),
-            2 => af.writew(offset, data[0] as u16 | (data[1] as u16) << 8),
-            4 => af.writel(offset, (data[0] as u32) | ((data[1] as u32) << 8) |
-                                   ((data[2] as u32) << 16) | ((data[3] as u32) << 24)),
+            1 => af.bm_writeb(offset, data[0]),
+            2 => af.bm_writew(offset, data[0] as u16 | (data[1] as u16) << 8),
+            4 => af.bm_writel(offset, (data[0] as u32) | ((data[1] as u32) << 8) |
+                                      ((data[2] as u32) << 16) | ((data[3] as u32) << 24)),
             l => println!("wtf write length of {}", l)
         }
     }
@@ -319,7 +319,6 @@ impl Ac97 {
             regs.do_reset();
 
             // TODO(dgreid) stop audio
-            // What is this for? memset (s->silence, 0, sizeof (s->silence));
         } else {
             regs.cr = val & CR_VALID_MASK;
             if regs.cr & CR_RPBM == 0 { // Run/Pause set to pause.
@@ -364,7 +363,7 @@ impl Ac97 {
         }
     }
 
-    pub fn readb(&mut self, offset: u64) -> u8 {
+    pub fn bm_readb(&mut self, offset: u64) -> u8 {
         match offset {
             0x04 => self.pi_regs.civ,
             0x05 => self.pi_regs.lvi,
@@ -383,7 +382,7 @@ impl Ac97 {
         }
     }
 
-    pub fn readw(&mut self, offset: u64) -> u16 {
+    pub fn bm_readw(&mut self, offset: u64) -> u16 {
         match offset {
             0x06 => self.pi_regs.sr,
             0x08 => self.pi_regs.picb,
@@ -395,7 +394,7 @@ impl Ac97 {
         }
     }
 
-    pub fn readl(&mut self, offset: u64) -> u32 {
+    pub fn bm_readl(&mut self, offset: u64) -> u32 {
         match offset {
             0x00 => self.pi_regs.bdbar,
             0x04 => self.pi_regs.atomic_status_regs(),
@@ -409,7 +408,7 @@ impl Ac97 {
         }
     }
 
-    pub fn writeb(&mut self, offset: u64, val: u8) {
+    pub fn bm_writeb(&mut self, offset: u64, val: u8) {
         match offset {
             0x04 => (), // RO
             0x05 => self.set_lvi(Ac97Function::Input, val),
@@ -428,7 +427,7 @@ impl Ac97 {
         }
     }
 
-    pub fn writew(&mut self, offset: u64, val: u16) {
+    pub fn bm_writew(&mut self, offset: u64, val: u16) {
         match offset {
             0x06 => self.set_sr(Ac97Function::Input, val),
             0x08 => (), // RO
@@ -440,7 +439,7 @@ impl Ac97 {
         }
     }
 
-    pub fn writel(&mut self, offset: u64, val: u32) {
+    pub fn bm_writel(&mut self, offset: u64, val: u32) {
         match offset {
             0x00 => self.set_bdbar(Ac97Function::Input, val),
             0x10 => self.set_bdbar(Ac97Function::Output, val),
