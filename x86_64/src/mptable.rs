@@ -79,6 +79,7 @@ const MPC_SPEC: i8 = 4;
 const MPC_OEM: [c_char; 8] = char_array!(c_char; 'C', 'R', 'O', 'S', 'V', 'M', ' ', ' ');
 const MPC_PRODUCT_ID: [c_char; 12] = ['0' as c_char; 12];
 const BUS_TYPE_ISA: [u8; 6] = char_array!(u8; 'I', 'S', 'A', ' ', ' ', ' ');
+const BUS_TYPE_PCI: [u8; 6] = char_array!(u8; 'P', 'C', 'I', ' ', ' ', ' ');
 const IO_APIC_DEFAULT_PHYS_BASE: u32 = 0xfec00000; // source: linux/arch/x86/include/asm/apicdef.h
 const APIC_DEFAULT_PHYS_BASE: u32 = 0xfee00000; // source: linux/arch/x86/include/asm/apicdef.h
 const APIC_VERSION: u8 = 0x14;
@@ -112,6 +113,8 @@ fn compute_mp_size(num_cpus: u8) -> usize {
 
 /// Performs setup of the MP table for the given `num_cpus`.
 pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
+    const PCI_BUS_ID: u8 = 0;
+    const ISA_BUS_ID: u8 = 1;
 
     // Used to keep track of the next base pointer into the MP table.
     let mut base_mp = GuestAddress(MPTABLE_START);
@@ -188,7 +191,18 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
         let size = mem::size_of::<mpc_bus>();
         let mut mpc_bus = mpc_bus::default();
         mpc_bus.type_ = MP_BUS as u8;
-        mpc_bus.busid = 0;
+        mpc_bus.busid = PCI_BUS_ID;
+        mpc_bus.bustype = BUS_TYPE_PCI;
+        mem.write_obj_at_addr(mpc_bus, base_mp)
+            .map_err(|_| Error::WriteMpcBus)?;
+        base_mp = base_mp.unchecked_add(size as u64);
+        checksum = checksum.wrapping_add(compute_checksum(&mpc_bus));
+    }
+    {
+        let size = mem::size_of::<mpc_bus>();
+        let mut mpc_bus = mpc_bus::default();
+        mpc_bus.type_ = MP_BUS as u8;
+        mpc_bus.busid = ISA_BUS_ID;
         mpc_bus.bustype = BUS_TYPE_ISA;
         mem.write_obj_at_addr(mpc_bus, base_mp)
             .map_err(|_| Error::WriteMpcBus)?;
@@ -201,7 +215,7 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
         mpc_intsrc.type_ = MP_INTSRC as u8;
         mpc_intsrc.irqtype = mp_irq_source_types_mp_INT as u8;
         mpc_intsrc.irqflag = MP_IRQDIR_DEFAULT as u16;
-        mpc_intsrc.srcbus = 0;
+        mpc_intsrc.srcbus = ISA_BUS_ID;
         mpc_intsrc.srcbusirq = 0;
         mpc_intsrc.dstapic = 0;
         mpc_intsrc.dstirq = 0;
@@ -217,7 +231,7 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
         mpc_intsrc.type_ = MP_INTSRC as u8;
         mpc_intsrc.irqtype = mp_irq_source_types_mp_INT as u8;
         mpc_intsrc.irqflag = MP_IRQDIR_DEFAULT as u16;
-        mpc_intsrc.srcbus = 0;
+        mpc_intsrc.srcbus = ISA_BUS_ID;
         mpc_intsrc.srcbusirq = i;
         mpc_intsrc.dstapic = ioapicid;
         mpc_intsrc.dstirq = i;
@@ -232,7 +246,7 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
         mpc_lintsrc.type_ = MP_LINTSRC as u8;
         mpc_lintsrc.irqtype = mp_irq_source_types_mp_ExtINT as u8;
         mpc_lintsrc.irqflag = MP_IRQDIR_DEFAULT as u16;
-        mpc_lintsrc.srcbusid = 0;
+        mpc_lintsrc.srcbusid = ISA_BUS_ID;
         mpc_lintsrc.srcbusirq = 0;
         mpc_lintsrc.destapic = 0;
         mpc_lintsrc.destapiclint = 0;
@@ -247,7 +261,7 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
         mpc_lintsrc.type_ = MP_LINTSRC as u8;
         mpc_lintsrc.irqtype = mp_irq_source_types_mp_NMI as u8;
         mpc_lintsrc.irqflag = MP_IRQDIR_DEFAULT as u16;
-        mpc_lintsrc.srcbusid = 0;
+        mpc_lintsrc.srcbusid = ISA_BUS_ID;
         mpc_lintsrc.srcbusirq = 0;
         mpc_lintsrc.destapic = 0xFF; // Per SeaBIOS
         mpc_lintsrc.destapiclint = 1;
