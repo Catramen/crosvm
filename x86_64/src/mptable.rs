@@ -226,6 +226,7 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
     }
     // Per kvm_setup_default_irq_routing() in kernel
     for i in 0..16 {
+        if i == 5 { continue; }
         let size = mem::size_of::<mpc_intsrc>();
         let mut mpc_intsrc = mpc_intsrc::default();
         mpc_intsrc.type_ = MP_INTSRC as u8;
@@ -235,6 +236,21 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
         mpc_intsrc.srcbusirq = i;
         mpc_intsrc.dstapic = ioapicid;
         mpc_intsrc.dstirq = i;
+        mem.write_obj_at_addr(mpc_intsrc, base_mp)
+            .map_err(|_| Error::WriteMpcIntsrc)?;
+        base_mp = base_mp.unchecked_add(size as u64);
+        checksum = checksum.wrapping_add(compute_checksum(&mpc_intsrc));
+    }
+    {
+        let size = mem::size_of::<mpc_intsrc>();
+        let mut mpc_intsrc = mpc_intsrc::default();
+        mpc_intsrc.type_ = MP_INTSRC as u8;
+        mpc_intsrc.irqtype = mp_irq_source_types_mp_INT as u8;
+        mpc_intsrc.irqflag = MP_IRQDIR_DEFAULT as u16;
+        mpc_intsrc.srcbus = PCI_BUS_ID;
+        mpc_intsrc.srcbusirq = 1 << 2 | 0x00; // slot <<2 | int A(0)
+        mpc_intsrc.dstapic = ioapicid;
+        mpc_intsrc.dstirq = 5;
         mem.write_obj_at_addr(mpc_intsrc, base_mp)
             .map_err(|_| Error::WriteMpcIntsrc)?;
         base_mp = base_mp.unchecked_add(size as u64);
