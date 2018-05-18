@@ -808,8 +808,9 @@ pub fn run_config(cfg: Config) -> Result<()> {
     let ac97_irqfd = EventFd::new().unwrap();
     let base_pci_irq = Arch::get_base_irq();
     let mut pci_irqs = 0;
-    vm.register_irqfd(&ac97_irqfd, base_pci_irq + pci_irqs).unwrap();
-    pci.add_device(Box::new(devices::Ac97Dev::new(ac97_irqfd, base_pci_irq + pci_irqs)));
+    let this_int = base_pci_irq + pci_irqs;
+    vm.register_irqfd(&ac97_irqfd, this_int).unwrap();
+    pci.add_device(Box::new(devices::Ac97Dev::new(ac97_irqfd, this_int, PciInterruptPin::IntA)));
     pci_irqs += 1;
 
     let (io_bus, stdio_serial) = Arch::setup_io_bus(&mut vm,

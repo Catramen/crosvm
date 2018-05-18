@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use pci::pci_types::PciInterruptPin;
+
 const NUM_CONFIGURATION_REGISTERS: usize = 16;
 
 const BAR0_REG: usize = 4;
@@ -12,7 +14,6 @@ const BAR_MEM_ADDR_MASK: u32 = 0xffff_fff0;
 const NUM_BAR_REGS: usize = 6;
 
 const INTERRUPT_LINE_PIN_REG: usize = 15;
-
 
 /// Represents the types of PCI headers allowed in the configuration registers.
 pub enum PciHeaderType {
@@ -253,9 +254,15 @@ impl PciConfiguration {
     }
 
     /// Configures the IRQ line and pin used by this device.
-    pub fn set_irq(&mut self, line: u8, pin:u8) {
+    pub fn set_irq(&mut self, line: u8, pin: PciInterruptPin) {
+        let pin_mask: u32 = match pin {
+            PciInterruptPin::IntA => 0,
+            PciInterruptPin::IntB => 1,
+            PciInterruptPin::IntC => 2,
+            PciInterruptPin::IntD => 3,
+        };
         self.registers[INTERRUPT_LINE_PIN_REG] =
             (self.registers[INTERRUPT_LINE_PIN_REG] & 0xffff_0000) |
-                ((pin as u32) << 8) | line as u32;
+                (pin_mask << 8) | line as u32;
     }
 }

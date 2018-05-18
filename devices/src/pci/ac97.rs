@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 use std::sync::{Arc, Mutex};
-use std::collections::BTreeMap;
 
 use BusDevice;
 
 use pci::pci_configuration::{PciClassCode, PciConfiguration, PciHeaderType, PciMultimediaSubclass};
 use pci::pci_device::PciDevice;
+use pci::pci_types::PciInterruptPin;
 use sys_util::EventFd;
 
 // Use 82801AA because it's what qemu does.
@@ -22,7 +22,7 @@ pub struct Ac97Dev {
 }
 
 impl Ac97Dev {
-    pub fn new(irq_evt: EventFd, irq_num: u32) -> Self {
+    pub fn new(irq_evt: EventFd, irq_num: u32, irq_pin: PciInterruptPin) -> Self {
         let mut config_regs = PciConfiguration::new(0x8086,
                                                     PCI_DEVICE_ID_INTEL_82801AA_5,
                                                     PciClassCode::MultimediaController,
@@ -31,8 +31,9 @@ impl Ac97Dev {
         // todo remove unwraps
         config_regs.add_io_region(0x1000, 0x0100).unwrap();
         config_regs.add_io_region(0x1400, 0x0400).unwrap();
-        // TODO(dgreid) - panic if irq_num > 255
-        config_regs.set_irq(irq_num as u8, 1);
+        // TODO(dgreid) - erro if irq_num > 255
+        // TODO(dgreid) - erro if irq_line > 3
+        config_regs.set_irq(irq_num as u8, irq_pin);
 
         let audio_function = Arc::new(Mutex::new(Ac97::new()));
         Ac97Dev {
@@ -59,9 +60,6 @@ impl PciDevice for Ac97Dev {
     fn config_registers_mut(&mut self) -> &mut PciConfiguration {
         &mut self.config_regs
     }
-
-//    fn get_irq_num(&self) -> u32 {
- //   }
 }
 
 struct Ac97Mixer {
@@ -356,7 +354,7 @@ impl Ac97 {
 
         regs.sr = val;
 
-        if (interrupt_high) {
+        if interrupt_high {
             self.glob_sta |= int_mask;
             //pci_irq_assert(&s->dev);
         } else {
