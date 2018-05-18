@@ -202,13 +202,20 @@ impl arch::LinuxArch for AArch64 {
         cmdline
     }
 
+    /// Returns the interrupt to start assigning from. This allows the architecture to reserve some
+    /// interrupts for architecture specific tasks.
+    fn get_base_irq() -> u32 {
+        return AARCH64_IRQ_BASE;
+    }
+
     /// This creates and returns a device_manager object for this vm.
     ///
     /// # Arguments
     ///
     /// * `vm` - the vm object
     /// * `mem` - A copy of the GuestMemory object for this VM.
-    fn get_device_manager(vm: &mut Vm, mem: GuestMemory) ->
+    /// * `num_extra_irq` - Number of IRQs taken for added devices.
+    fn get_device_manager(vm: &mut Vm, mem: GuestMemory, num_extra_irq: u32) ->
         Result<device_manager::DeviceManager> {
         let rtc_evt = EventFd::new()?;
         vm.register_irqfd(&rtc_evt, AARCH64_RTC_IRQ)?;
@@ -217,7 +224,7 @@ impl arch::LinuxArch for AArch64 {
                                                         mem,
                                                         AARCH64_MMIO_LEN,
                                                         AARCH64_MMIO_BASE,
-                                                        AARCH64_IRQ_BASE);
+                                                        AARCH64_IRQ_BASE + num_extra_irq);
         let com_evt_1_3 = EventFd::new()?;
         let serial = Arc::new(Mutex::new(devices::Serial::new_out(
             com_evt_1_3.try_clone()?,

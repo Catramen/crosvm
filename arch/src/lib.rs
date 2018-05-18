@@ -76,13 +76,18 @@ pub trait LinuxArch {
     /// This returns a minimal kernel command for this architecture.
     fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline;
 
+    /// Returns the interrupt to start assigning from. This allows the architecture to reserve some
+    /// interrupts for architecture specific tasks.
+    fn get_base_irq() -> u32;
+
     /// This creates and returns a device_manager object for this vm.
     ///
     /// # Arguments
     ///
     /// * `vm` - the vm object
     /// * `mem` - A copy of the GuestMemory object for this VM.
-    fn get_device_manager(vm: &mut Vm, mem: GuestMemory)
+    /// * `num_extra_irq` - Number of IRQs taken for added devices.
+    fn get_device_manager(vm: &mut Vm, mem: GuestMemory, num_extra_irq: u32)
                           -> Result<device_manager::DeviceManager>;
 
     /// Sets up the IO bus for this platform

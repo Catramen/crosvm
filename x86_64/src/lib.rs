@@ -132,6 +132,7 @@ const ZERO_PAGE_OFFSET: u64 = 0x7000;
 const KERNEL_START_OFFSET: u64 = 0x200000;
 const CMDLINE_OFFSET: u64 = 0x20000;
 const CMDLINE_MAX_SIZE: u64 = KERNEL_START_OFFSET - CMDLINE_OFFSET;
+const X86_64_IRQ_BASE: u32 = 5;
 
 fn configure_system(guest_mem: &GuestMemory,
                     kernel_addr: GuestAddress,
@@ -314,19 +315,26 @@ impl arch::LinuxArch for X8664arch {
         cmdline
     }
 
+    /// Returns the interrupt to start assigning from. This allows the architecture to reserve some
+    /// interrupts for architecture specific tasks.
+    fn get_base_irq() -> u32 {
+        return X86_64_IRQ_BASE;
+    }
+
     /// This creates and returns a device_manager object for this vm.
     ///
     /// # Arguments
     ///
     /// * `vm` - the vm object
     /// * `mem` - A copy of the GuestMemory object for this VM.
-    fn get_device_manager(vm: &mut Vm, mem: GuestMemory) ->
+    /// * `num_extra_irq` - Number of IRQs taken for added devices.
+    fn get_device_manager(vm: &mut Vm, mem: GuestMemory, num_extra_irq: u32) ->
         Result<device_manager::DeviceManager> {
         const MMIO_BASE: u64 = 0xe0000000;
         const MMIO_LEN: u64 = 0x1000;
-        const IRQ_BASE: u32 = 6;
 
-        Ok(device_manager::DeviceManager::new(vm, mem, MMIO_LEN, MMIO_BASE, IRQ_BASE))
+        Ok(device_manager::DeviceManager::new(vm, mem, MMIO_LEN, MMIO_BASE,
+                                              X86_64_IRQ_BASE + num_extra_irq))
     }
 
     /// Sets up the IO bus for this platform

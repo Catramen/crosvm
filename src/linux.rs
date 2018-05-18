@@ -226,10 +226,11 @@ fn setup_mmio_bus(cfg: &Config,
                   mem: &GuestMemory,
                   cmdline: &mut kernel_cmdline::Cmdline,
                   control_sockets: &mut Vec<UnlinkUnixDatagram>,
-                  balloon_device_socket: UnixDatagram)
+                  balloon_device_socket: UnixDatagram,
+                  pci_irqs: u32)
                   -> Result<devices::Bus> {
     static DEFAULT_PIVOT_ROOT: &'static str = "/var/empty";
-    let mut device_manager = Arch::get_device_manager(vm, mem.clone()).
+    let mut device_manager = Arch::get_device_manager(vm, mem.clone(), pci_irqs).
         map_err(|e| Error::SetupMMIOBus(e))?;
 
     // An empty directory for jailed device's pivot root.
@@ -822,7 +823,8 @@ pub fn run_config(cfg: Config) -> Result<()> {
                                   &mem,
                                   &mut cmdline,
                                   &mut control_sockets,
-                                  balloon_device_socket)?;
+                                  balloon_device_socket,
+                                  Arch::get_base_irq())?;
 
     let gpu_memory_allocator = if cfg.wayland_dmabuf {
         create_gpu_memory_allocator()?
