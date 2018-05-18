@@ -255,14 +255,15 @@ impl PciConfiguration {
 
     /// Configures the IRQ line and pin used by this device.
     pub fn set_irq(&mut self, line: u8, pin: PciInterruptPin) {
-        let pin_mask: u32 = match pin {
-            PciInterruptPin::IntA => 0,
-            PciInterruptPin::IntB => 1,
-            PciInterruptPin::IntC => 2,
-            PciInterruptPin::IntD => 3,
+        // `pin` is 1-based in the pci config space.
+        let pin_idx = match pin {
+            PciInterruptPin::IntA => 1,
+            PciInterruptPin::IntB => 2,
+            PciInterruptPin::IntC => 3,
+            PciInterruptPin::IntD => 4,
         };
         self.registers[INTERRUPT_LINE_PIN_REG] =
             (self.registers[INTERRUPT_LINE_PIN_REG] & 0xffff_0000) |
-                (pin_mask << 8) | line as u32;
+                (pin_idx << 8) | line as u32;
     }
 }

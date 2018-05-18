@@ -11,6 +11,7 @@ use std::fmt::{self, Display};
 
 use libc::c_char;
 
+use devices::PciInterruptPin;
 use sys_util::{GuestAddress, GuestMemory};
 
 use mpspec::*;
@@ -112,7 +113,9 @@ fn compute_mp_size(num_cpus: u8) -> usize {
 }
 
 /// Performs setup of the MP table for the given `num_cpus`.
-pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
+pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8,
+                     pci_irqs: Vec<(u32, PciInterruptPin)>)
+        -> Result<()> {
     const PCI_BUS_ID: u8 = 0;
     const ISA_BUS_ID: u8 = 1;
 
@@ -225,7 +228,7 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
         checksum = checksum.wrapping_add(compute_checksum(&mpc_intsrc));
     }
     // Per kvm_setup_default_irq_routing() in kernel
-    for i in 0..X86_64_IRQ_BASE {
+    for i in 0..5 {
         let size = mem::size_of::<mpc_intsrc>();
         let mut mpc_intsrc = mpc_intsrc::default();
         mpc_intsrc.type_ = MP_INTSRC as u8;
@@ -241,32 +244,32 @@ pub fn setup_mptable(mem: &GuestMemory, num_cpus: u8) -> Result<()> {
         checksum = checksum.wrapping_add(compute_checksum(&mpc_intsrc));
     }
     // Insert PCI interrupts after platform IRQs.
-    for i in X86_64_IRQ_BASE..(X86_64_IRQ_BASE + pci_irqs.len()) {
+    for (i, pci_irq) in pci_irqs.iter().enumerate() {
         let size = mem::size_of::<mpc_intsrc>();
         let mut mpc_intsrc = mpc_intsrc::default();
         mpc_intsrc.type_ = MP_INTSRC as u8;
         mpc_intsrc.irqtype = mp_irq_source_types_mp_INT as u8;
         mpc_intsrc.irqflag = MP_IRQDIR_DEFAULT as u16;
         mpc_intsrc.srcbus = PCI_BUS_ID;
-        mpc_intsrc.srcbusirq = 1 << 2 | 0x00; // slot <<2 | int A(0)
+        mpc_intsrc.srcbusirq = 1 << 2 | pci_irq.1.to_mask() as u8; // slot <<2 | int A(0)
         mpc_intsrc.dstapic = ioapicid;
-        mpc_intsrc.dstirq = 5;
+        mpc_intsrc.dstirq = 5 + i as u8;
         mem.write_obj_at_addr(mpc_intsrc, base_mp)
             .map_err(|_| Error::WriteMpcIntsrc)?;
         base_mp = base_mp.unchecked_add(size as u64);
         checksum = checksum.wrapping_add(compute_checksum(&mpc_intsrc));
     }
     // Finally insert ISA interrupts.
-    for i in X86_64_IRQ_BASE+pci_irqs.len()..16 {
+    for i in 5 + pci_irqs.len()..16 {
         let size = mem::size_of::<mpc_intsrc>();
         let mut mpc_intsrc = mpc_intsrc::default();
         mpc_intsrc.type_ = MP_INTSRC as u8;
         mpc_intsrc.irqtype = mp_irq_source_types_mp_INT as u8;
         mpc_intsrc.irqflag = MP_IRQDIR_DEFAULT as u16;
         mpc_intsrc.srcbus = ISA_BUS_ID;
-        mpc_intsrc.srcbusirq = i;
+        mpc_intsrc.srcbusirq = i as u8;
         mpc_intsrc.dstapic = ioapicid;
-        mpc_intsrc.dstirq = i;
+        mpc_intsrc.dstirq = i as u8;
         mem.write_obj_at_addr(mpc_intsrc, base_mp)
             .map_err(|_| Error::WriteMpcIntsrc)?;
         base_mp = base_mp.unchecked_add(size as u64);
@@ -345,7 +348,7 @@ mod tests {
         let mem = GuestMemory::new(&[(GuestAddress(MPTABLE_START),
                                       compute_mp_size(num_cpus) as u64)]).unwrap();
 
-        setup_mptable(&mem, num_cpus).unwrap();
+        setup_mptable(&mem, num_cpus, Vec::new()).unwrap();
     }
 
     #[test]
@@ -354,7 +357,7 @@ mod tests {
         let mem = GuestMemory::new(&[(GuestAddress(MPTABLE_START),
                                       (compute_mp_size(num_cpus) - 1) as u64)]).unwrap();
 
-        assert!(setup_mptable(&mem, num_cpus).is_err());
+        assert!(setup_mptable(&mem, num_cpus, Vec::new()).is_err());
     }
 
     #[test]
@@ -363,7 +366,7 @@ mod tests {
         let mem = GuestMemory::new(&[(GuestAddress(MPTABLE_START),
                                       compute_mp_size(num_cpus) as u64)]).unwrap();
 
-        setup_mptable(&mem, num_cpus).unwrap();
+        setup_mptable(&mem, num_cpus, Vec::new()).unwrap();
 
         let mpf_intel = mem.read_obj_from_addr(GuestAddress(MPTABLE_START)).unwrap();
 
@@ -376,7 +379,7 @@ mod tests {
         let mem = GuestMemory::new(&[(GuestAddress(MPTABLE_START),
                                       compute_mp_size(num_cpus) as u64)]).unwrap();
 
-        setup_mptable(&mem, num_cpus).unwrap();
+        setup_mptable(&mem, num_cpus, Vec::new()).unwrap();
 
         let mpf_intel: mpf_intel = mem.read_obj_from_addr(GuestAddress(MPTABLE_START)).unwrap();
         let mpc_offset = GuestAddress(mpf_intel.physptr as u64);
@@ -408,7 +411,7 @@ mod tests {
                                       compute_mp_size(MAX_CPUS) as u64)]).unwrap();
 
         for i in 0..MAX_CPUS {
-            setup_mptable(&mem, i).unwrap();
+            setup_mptable(&mem, i, Vec::new()).unwrap();
 
             let mpf_intel: mpf_intel = mem.read_obj_from_addr(GuestAddress(MPTABLE_START)).unwrap();
             let mpc_offset = GuestAddress(mpf_intel.physptr as u64);

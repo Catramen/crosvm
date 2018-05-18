@@ -807,11 +807,12 @@ pub fn run_config(cfg: Config) -> Result<()> {
     // TODO(dgreid) - remove unwraps
     let ac97_irqfd = EventFd::new().unwrap();
     let base_pci_irq = Arch::get_base_irq();
-    let mut pci_irqs = 0;
-    let this_int = base_pci_irq + pci_irqs;
+    let mut pci_irqs = Vec::new();
+    let this_int = base_pci_irq + pci_irqs.len() as u32;
     vm.register_irqfd(&ac97_irqfd, this_int).unwrap();
-    pci.add_device(Box::new(devices::Ac97Dev::new(ac97_irqfd, this_int, PciInterruptPin::IntA)));
-    pci_irqs += 1;
+    pci.add_device(Box::new(devices::Ac97Dev::new(ac97_irqfd, this_int,
+                                                  devices::PciInterruptPin::IntA)));
+    pci_irqs.push((this_int, devices::PciInterruptPin::IntA));
 
     let (io_bus, stdio_serial) = Arch::setup_io_bus(&mut vm,
                                                     exit_evt.try_clone().
@@ -827,7 +828,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
                                   &mut cmdline,
                                   &mut control_sockets,
                                   balloon_device_socket,
-                                  pci_irqs)?;
+                                  pci_irqs.len() as u32)?;
 
     let gpu_memory_allocator = if cfg.wayland_dmabuf {
         create_gpu_memory_allocator()?
@@ -846,8 +847,8 @@ pub fn run_config(cfg: Config) -> Result<()> {
     // kernel loading
     Arch::load_kernel(&mem, &mut kernel_image).map_err(|e| Error::LoadKernel(e))?;
     Arch::setup_system_memory(&mem, mem_size as u64, vcpu_count,
-                              &CString::new(cmdline).unwrap()).
-        map_err(|e| Error::SetupSystemMemory(e))?;
+                              &CString::new(cmdline).unwrap(), pci_irqs)
+        .map_err(|e| Error::SetupSystemMemory(e))?;
 
     setup_vcpu_signal_handler()?;
     for (cpu_id, vcpu) in vcpus.into_iter().enumerate() {

@@ -33,7 +33,7 @@ impl Ac97Dev {
         config_regs.add_io_region(0x1400, 0x0400).unwrap();
         // TODO(dgreid) - erro if irq_num > 255
         // TODO(dgreid) - erro if irq_line > 3
-        config_regs.set_irq(irq_num as u8, irq_pin);
+        config_regs.set_irq(irq_num as u8, PciInterruptPin::IntA);
 
         let audio_function = Arc::new(Mutex::new(Ac97::new()));
         Ac97Dev {
