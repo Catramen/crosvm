@@ -102,10 +102,23 @@ impl Ac97Mixer {
 impl BusDevice for Ac97Mixer {
     fn read(&mut self, offset: u64, data: &mut [u8]) {
 //        println!("read from mixer 0x{:x} {}", offset, data.len());
+        let mut af = self.audio_function.lock().unwrap();
+        match data.len() {
+            2 => {
+                let val: u16 = af.bm_readw(offset);
+                data[0] = val as u8;
+                data[1] = (val >> 8) as u8;
+            }
+            l => println!("wtf mixer read length of {}", l)
+        }
     }
 
     fn write(&mut self, offset: u64, data: &[u8]) {
- //       println!("write to mixer 0x{:x} {}", offset, data.len());
+        let mut af = self.audio_function.lock().unwrap();
+        match data.len() {
+            2 => af.mix_writew(offset, data[0] as u16 | (data[1] as u16) << 8),
+            l => println!("wtf mixer write length of {}", l)
+        }
     }
 }
 
