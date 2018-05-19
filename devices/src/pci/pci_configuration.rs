@@ -253,6 +253,13 @@ impl PciConfiguration {
         Some(bar_idx)
     }
 
+    /// Returns the address of the given BAR region.
+    pub fn get_bar_addr(&self, bar_num: usize) -> u32 {
+        let bar_idx = BAR0_REG + bar_num;
+
+        self.registers[bar_idx] & BAR_MEM_ADDR_MASK
+    }
+
     /// Configures the IRQ line and pin used by this device.
     pub fn set_irq(&mut self, line: u8, pin: PciInterruptPin) {
         // `pin` is 1-based in the pci config space.

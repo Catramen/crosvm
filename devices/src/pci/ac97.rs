@@ -46,9 +46,11 @@ impl Ac97Dev {
 
 impl PciDevice for Ac97Dev {
     fn bar_region(&self, addr: u64) -> Option<(u64, Arc<Mutex<BusDevice>>)> {
+        let bar0 = self.config_regs.get_bar_addr(0) as u64;
+        let bar1 = self.config_regs.get_bar_addr(1) as u64;
         match addr {
-            a if a >= 0x1000 && a < 0x1100 => Some((addr - 0x1000, self.mixer.clone())),
-            a if a >= 0x1400 && a < 0x1800 => Some((addr - 0x1400, self.bus_master.clone())),
+            a if a >= bar0 && a < bar0 + 0x100 => Some((addr - bar0, self.mixer.clone())),
+            a if a >= bar1 && a < bar1 + 0x400 => Some((addr - bar1, self.bus_master.clone())),
             _ => None,
         }
     }
