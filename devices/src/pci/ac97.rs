@@ -64,6 +64,29 @@ impl PciDevice for Ac97Dev {
     }
 }
 
+// Audio Mixer Registers
+//00h Reset
+//02h Master Volume Mute
+//04h Headphone Volume Mute
+//06h Master Volume Mono Mute
+//08h Master Tone (R & L)
+//0Ah PC_BEEP Volume Mute
+//0Ch Phone Volume Mute
+//0Eh Mic Volume Mute
+//10h Line In Volume Mute
+//12h CD Volume Mute
+//14h Video Volume Mute
+//16h Aux Volume Mute
+//18h PCM Out Volume Mute
+//1Ah Record Select
+//1Ch Record Gain Mute
+//1Eh Record Gain Mic Mute
+//20h General Purpose
+//22h 3D Control
+//24h AC’97 RESERVED
+//26h Powerdown Ctrl/Stat
+//28h Extended Audio
+//2Ah Extended Audio Ctrl/Stat
 struct Ac97Mixer {
     audio_function: Arc<Mutex<Ac97>>,
 }
@@ -230,6 +253,15 @@ struct Ac97 {
     glob_cnt: u32,
     glob_sta: u32,
     acc_sema: u8,
+
+    // Mixer Registers
+    master_volume_l: u8,
+    master_volume_r: u8,
+    master_mute: bool,
+    record_gain_l: u8,
+    record_gain_r: u8,
+    record_gain_mute: bool,
+    power_down_control: u16,
 }
 
 // glob_sta bits
@@ -264,6 +296,14 @@ const GS_RO_MASK: u32 = GS_B3S12 |
 const GS_VALID_MASK: u32 = 0x0003_ffff;
 const GS_WCLEAR_MASK: u32 = GS_RCS | GS_S1R1 | GS_S0R1 | GS_GSCI;
 
+// Mixer register bits
+const MUTE_REG_BIT: u16 = 0x8000;
+const VOL_REG_MASK: u16 = 0x003f;
+// Powerdown reg
+const PD_REG_STATUS_MASK: u16 = 0x000f;
+const PD_REG_OUTPUT_MUTE_MASK: u16 = 0xb200;
+const PD_REG_INPUT_MUTE_MASK: u16 = 0x0d00;
+
 impl Ac97 {
     pub fn new() -> Self {
         Ac97 {
@@ -273,10 +313,27 @@ impl Ac97 {
             glob_cnt: 0,
             glob_sta: 0x0000_0300, // primary and secondary codec ready set.
             acc_sema: 0,
+
+            master_volume_l: 0,
+            master_volume_r: 0,
+            master_mute: true,
+            record_gain_l: 0,
+            record_gain_r: 0,
+            record_gain_mute: true,
+            power_down_control: PD_REG_STATUS_MASK, // Report everything is ready.
         }
     }
 
-    fn regs(&mut self, func: &Ac97Function) -> &Ac97FunctionRegs {
+    pub fn output_muted(&self) -> bool {
+        self.master_mute | (self.power_down_control & PD_REG_OUTPUT_MUTE_MASK != 0)
+    }
+
+    pub fn input_muted(&self) -> bool {
+        self.record_gain_mute | (self.power_down_control & PD_REG_INPUT_MUTE_MASK != 0)
+    }
+
+    // Bus master handling
+    fn bm_regs(&mut self, func: &Ac97Function) -> &Ac97FunctionRegs {
         match func {
             Ac97Function::Input => &self.pi_regs,
             Ac97Function::Output => &self.po_regs,
@@ -284,7 +341,7 @@ impl Ac97 {
         }
     }
 
-    fn regs_mut(&mut self, func: &Ac97Function) -> &mut Ac97FunctionRegs {
+    fn bm_regs_mut(&mut self, func: &Ac97Function) -> &mut Ac97FunctionRegs {
         match func {
             Ac97Function::Input => &mut self.pi_regs,
             Ac97Function::Output => &mut self.po_regs,
@@ -293,16 +350,16 @@ impl Ac97 {
     }
 
     fn set_bdbar(&mut self, func: Ac97Function, val: u32) {
-        self.regs_mut(&func).bdbar = val & !0x03;
+        self.bm_regs_mut(&func).bdbar = val & !0x03;
     }
 
     fn set_lvi(&mut self, func: Ac97Function, val: u8) {
         // TODO(dgreid) - handle new pointer
-        self.regs_mut(&func).lvi = val % 32; // LVI wraps at 32.
+        self.bm_regs_mut(&func).lvi = val % 32; // LVI wraps at 32.
     }
 
     fn set_sr(&mut self, func: Ac97Function, val: u16) {
-        let mut sr = self.regs(&func).sr;
+        let mut sr = self.bm_regs(&func).sr;
         if val & SR_FIFOE != 0 {
             sr &= !SR_FIFOE;
         }
@@ -316,7 +373,7 @@ impl Ac97 {
     }
 
     fn set_cr(&mut self, func: Ac97Function, val: u8) {
-        let regs = self.regs_mut(&func);
+        let regs = self.bm_regs_mut(&func);
         if val & CR_RR != 0 {
             regs.do_reset();
 
@@ -450,5 +507,65 @@ impl Ac97 {
             0x30 => (), // RO
             o => println!("wtf write long to 0x{:x}", o),
         }
+    }
+
+    pub fn mix_readw(&self, offset: u64) -> u16 {
+        match offset {
+            0x02 => self.get_master_reg(),
+            0x1c => self.get_record_gain_reg(),
+            0x26 => self.power_down_control,
+            _ => 0,
+        }
+    }
+
+    pub fn mix_writew(&mut self, offset: u64, val: u16) {
+        match offset {
+            0x02 => self.set_master_reg(val),
+            0x1c => self.set_record_gain_reg(val),
+            0x26 => self.set_power_down_reg(val),
+            _ => (),
+        }
+    }
+ 
+    // Returns the master mute and l/r volumes (reg 0x02).
+    fn get_master_reg(&self) -> u16 {
+        let mut reg = (self.master_volume_l as u16) << 8 | self.master_volume_r as u16;
+        if self.master_mute {
+            reg | MUTE_REG_BIT
+        } else {
+            reg
+        }
+    }
+
+    // Handles writes to the master register (0x02).
+    fn set_master_reg(&mut self, val: u16) {
+        // TODO(dgreid) set mute right away on the stream.
+        self.master_mute = val & MUTE_REG_BIT != 0;
+        self.master_volume_r = (val & VOL_REG_MASK) as u8;
+        self.master_volume_l = (val >> 8 & VOL_REG_MASK) as u8;
+    }
+
+    // Returns the record gain register (0x01c).
+    fn get_record_gain_reg(&self) -> u16 {
+        let mut reg = (self.record_gain_l as u16) << 8 | self.record_gain_r as u16;
+        if self.record_gain_mute {
+            reg | MUTE_REG_BIT
+        } else {
+            reg
+        }
+    }
+
+    // Handles writes to the record_gain register (0x1c).
+    fn set_record_gain_reg(&mut self, val: u16) {
+        // TODO(dgreid) set mute right away on the stream.
+        self.record_gain_mute = val & MUTE_REG_BIT != 0;
+        self.record_gain_r = (val & VOL_REG_MASK) as u8;
+        self.record_gain_l = (val >> 8 & VOL_REG_MASK) as u8;
+    }
+
+    // Handles writes to the powerdown ctrl/status register (0x26).
+    fn set_power_down_reg(&mut self, val: u16) {
+        self.power_down_control = val;
+        // TODO(dgreid) handle mute state changes
     }
 }
