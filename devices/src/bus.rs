@@ -107,8 +107,8 @@ impl Bus {
             }
             // Check if the device is nested under this item as it could be a bus such as PCI.
             let dev = item.device.lock().unwrap();
-            if let Some((offset, device)) = dev.child_dev(addr) {
-                return Some((offset, device.clone()));
+            if let Some(r) = dev.child_dev(addr) {
+                return Some(r);
             }
         }
         None

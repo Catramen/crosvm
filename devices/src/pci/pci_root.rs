@@ -161,8 +161,8 @@ impl BusDevice for PciRoot {
 
     fn child_dev(&self, addr: u64) -> Option<(u64, Arc<Mutex<BusDevice>>)> {
         for d in self.devices.iter() {
-            if let Some((offset, dev)) = d.bar_region(addr) {
-                return Some((offset, dev.clone()));
+            if let Some(r) = d.bar_region(addr) {
+                return Some(r);
             }
         }
         None
