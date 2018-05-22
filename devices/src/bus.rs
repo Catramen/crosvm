@@ -78,13 +78,18 @@ impl PartialOrd for BusRange {
 #[derive(Clone)]
 struct BusItem {
     device: Arc<Mutex<BusDevice>>,
-    ranges: Vec<BusRange>,
+    range: BusRange,
+    offset: u64,
 }
 
 impl BusItem {
     /// Returns `Some(offset)` if `addr` is contained in a range.
     pub fn addr_offset(&self, addr: u64) -> Option<u64> {
-        self.ranges.iter().find(|r| r.contains(addr)).map(|r| addr - r.base)
+        if self.range.contains(addr) {
+            Some(addr - self.range.base + self.offset)
+        } else {
+            None
+        }
     }
 }
 
@@ -106,12 +111,12 @@ impl Bus {
     fn get_device(&self, addr: u64) -> Option<(u64, Arc<Mutex<BusDevice>>)> {
         for item in &self.devices {
             if let Some(offset) = item.addr_offset(addr) {
-                return Some((offset, item.device.clone()));
+                return Some((offset + item.offset, item.device.clone()));
             }
             // Check if the device is nested under this item as it could be a bus such as PCI.
             let dev = item.device.lock().unwrap();
-            if let Some(r) = dev.child_dev(addr) {
-                return Some(r);
+            if let Some((offset, device)) = dev.child_dev(addr) {
+                return Some((offset + item.offset, device));
             }
         }
         None
@@ -124,37 +129,34 @@ impl Bus {
         }
 
         // Reject all cases where the new device's range overlaps with an existing device.
-        for item in &self.devices {
-            if item.ranges.iter().any(|r| r.overlaps(base, len)) {
-                return Err(Error::Overlap);
-            }
+        if self.devices.iter().any(|item| item.range.overlaps(base, len)) {
+            return Err(Error::Overlap);
         }
 
-        self.devices.push(BusItem { device, ranges: vec![BusRange{base, len}] });
+        self.devices.push(BusItem { device, range: BusRange { base, len }, offset: 0 });
 
         Ok(())
     }
 
     /// Puts the given device at the given address space.
-    pub fn insert_multi_region(&mut self, device: Arc<Mutex<BusDevice>>,
-                               ranges: Vec<BusRange>) -> Result<()> {
-        // Reject all cases where the new device's range overlaps with an existing device.
-        for item in &self.devices {
-            for new_range in ranges.iter() {
-                if new_range.len == 0 {
-                    return Err(Error::Overlap);
-                }
-
-                if item.ranges.iter().any(|r| r.overlaps(new_range.base, new_range.len)) {
-                    return Err(Error::Overlap);
-                }
-            }
+    /// * `offset` - will be added to each `read` and `write` call. It is used to differentiate when
+    ///   a device supports multiple ranges.
+    pub fn insert_offset(&mut self, device: Arc<Mutex<BusDevice>>, base: u64,
+                         len: u64, offset: u64) -> Result<()> {
+        if len == 0 {
+            return Err(Error::Overlap);
         }
 
-        self.devices.push(BusItem { device, ranges });
+        // Reject all cases where the new device's range overlaps with an existing device.
+        if self.devices.iter().any(|item| item.range.overlaps(base, len)) {
+            return Err(Error::Overlap);
+        }
+
+        self.devices.push(BusItem { device, range: BusRange { base, len }, offset });
 
         Ok(())
     }
+
 
     /// Reads data from the device that owns the range containing `addr` and puts it into `data`.
     ///
