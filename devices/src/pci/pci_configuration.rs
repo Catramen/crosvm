@@ -4,7 +4,8 @@
 
 use pci::pci_types::PciInterruptPin;
 
-const NUM_CONFIGURATION_REGISTERS: usize = 16;
+// The number of 32bit registers in the config space, 256 bytes.
+const NUM_CONFIGURATION_REGISTERS: usize = 64;
 
 const BAR0_REG: usize = 4;
 const BAR5_REG: usize = 9;
