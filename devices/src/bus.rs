@@ -37,17 +37,20 @@ pub enum Error {
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug, Copy, Clone)]
-struct BusRange(u64, u64);
+pub struct BusRange {
+    base: u64,
+    len: u64,
+}
 
 impl BusRange {
     /// Returns true if `addr` is within the range.
     pub fn contains(&self, addr: u64) -> bool {
-        self.0 <= addr && addr < self.0 + self.1
+        self.base <= addr && addr < self.base + self.len
     }
 
     /// Returns true if there is overlap with the given range.
     pub fn overlaps(&self, base: u64, len: u64) -> bool {
-        self.0 < (base + len) && base < self.0 + self.1
+        self.base < (base + len) && base < self.base + self.len
     }
 }
 
@@ -55,19 +58,19 @@ impl Eq for BusRange {}
 
 impl PartialEq for BusRange {
     fn eq(&self, other: &BusRange) -> bool {
-        self.0 == other.0
+        self.base == other.base
     }
 }
 
 impl Ord for BusRange {
     fn cmp(&self, other: &BusRange) -> Ordering {
-        self.0.cmp(&other.0)
+        self.base.cmp(&other.base)
     }
 }
 
 impl PartialOrd for BusRange {
     fn partial_cmp(&self, other: &BusRange) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
+        self.base.partial_cmp(&other.base)
     }
 }
 
@@ -81,7 +84,7 @@ struct BusItem {
 impl BusItem {
     /// Returns `Some(offset)` if `addr` is contained in a range.
     pub fn addr_offset(&self, addr: u64) -> Option<u64> {
-        self.ranges.iter().find(|r| r.contains(addr)).map(|r| addr - r.0)
+        self.ranges.iter().find(|r| r.contains(addr)).map(|r| addr - r.base)
     }
 }
 
@@ -127,7 +130,28 @@ impl Bus {
             }
         }
 
-        self.devices.push(BusItem { device, ranges: vec![BusRange(base, len)] });
+        self.devices.push(BusItem { device, ranges: vec![BusRange{base, len}] });
+
+        Ok(())
+    }
+
+    /// Puts the given device at the given address space.
+    pub fn insert_multi_region(&mut self, device: Arc<Mutex<BusDevice>>,
+                               ranges: Vec<BusRange>) -> Result<()> {
+        // Reject all cases where the new device's range overlaps with an existing device.
+        for item in &self.devices {
+            for new_range in ranges.iter() {
+                if new_range.len == 0 {
+                    return Err(Error::Overlap);
+                }
+
+                if item.ranges.iter().any(|r| r.overlaps(new_range.base, new_range.len)) {
+                    return Err(Error::Overlap);
+                }
+            }
+        }
+
+        self.devices.push(BusItem { device, ranges });
 
         Ok(())
     }
