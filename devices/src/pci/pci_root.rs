@@ -68,12 +68,12 @@ impl PciRoot {
         match device {
             0 => {
                 // If bus and device are both zero, then read from the root config.
-                self.root_configuration.read_reg(register)
+                self.config_register_read(register)
             }
             dev_num => {
                 self.devices.get(dev_num - 1)
                             .map_or(0xffff_ffff,
-                                    |d| d.config_registers().read_reg(register))
+                                    |d| d.config_register_read(register))
             }
         }
     }
@@ -90,25 +90,16 @@ impl PciRoot {
             return;
         }
 
-        let regs = match device {
+        match device {
             0 => {
                 // If bus and device are both zero, then read from the root config.
-                &mut self.root_configuration
+                self.config_register_write(register, offset, data);
             }
             dev_num => {
                 // dev_num is 1-indexed here.
-                match self.devices.get_mut(dev_num - 1) {
-                    Some(r) => r.config_registers_mut(),
-                    None => return,
-                }
+                self.devices.get_mut(dev_num - 1)
+                            .map(|d| d.config_register_write(register,offset,data));
             }
-        };
-        match data.len()  {
-            1 => regs.write_byte(register * 4 + offset as usize, data[0]),
-            2 => regs.write_word(register * 4 + offset as usize,
-                                 (data[0] as u16) | (data[1] as u16) << 8),
-            4 => regs.write_reg(register, unpack4(data)),
-            _ => (),
         }
     }
 
@@ -166,6 +157,20 @@ impl BusDevice for PciRoot {
             }
         }
         None
+    }
+}
+
+impl PciDevice for PciRoot {
+    fn bar_region(&self, addr: u64) -> Option<(u64, Arc<Mutex<BusDevice>>)> {
+        None
+    }
+
+    fn config_registers(&self) -> &PciConfiguration {
+        &self.root_configuration
+    }
+
+    fn config_registers_mut(&mut self) -> &mut PciConfiguration {
+        &mut self.root_configuration
     }
 }
 
