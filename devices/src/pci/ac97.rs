@@ -17,8 +17,7 @@ const PCI_DEVICE_ID_INTEL_82801AA_5: u16 = 0x2415;
 /// AC97 audio device emulation.
 pub struct Ac97Dev {
     config_regs: PciConfiguration,
-    mixer: Arc<Mutex<Ac97Mixer>>,
-    bus_master: Arc<Mutex<Ac97BusMaster>>,
+    bus_device: Arc<Mutex<Ac97BusDevice>>,
 }
 
 impl Ac97Dev {
@@ -38,8 +37,7 @@ impl Ac97Dev {
         let audio_function = Arc::new(Mutex::new(Ac97::new()));
         Ac97Dev {
             config_regs,
-            mixer: Arc::new(Mutex::new(Ac97Mixer::new(audio_function.clone()))),
-            bus_master: Arc::new(Mutex::new(Ac97BusMaster::new(audio_function))),
+            bus_device: Arc::new(Mutex::new(Ac97BusDevice::new(audio_function.clone()))),
         }
     }
 }
@@ -49,8 +47,8 @@ impl PciDevice for Ac97Dev {
         let bar0 = self.config_regs.get_bar_addr(0) as u64;
         let bar1 = self.config_regs.get_bar_addr(1) as u64;
         match addr {
-            a if a >= bar0 && a < bar0 + 0x100 => Some((addr - bar0, self.mixer.clone())),
-            a if a >= bar1 && a < bar1 + 0x400 => Some((addr - bar1, self.bus_master.clone())),
+            a if a >= bar0 && a < bar0 + 0x100 => Some((addr, self.bus_device.clone())),
+            a if a >= bar1 && a < bar1 + 0x400 => Some((addr, self.bus_device.clone())),
             _ => None,
         }
     }
@@ -65,75 +63,29 @@ impl PciDevice for Ac97Dev {
 }
 
 // Audio Mixer Registers
-//00h Reset
-//02h Master Volume Mute
-//04h Headphone Volume Mute
-//06h Master Volume Mono Mute
-//08h Master Tone (R & L)
-//0Ah PC_BEEP Volume Mute
-//0Ch Phone Volume Mute
-//0Eh Mic Volume Mute
-//10h Line In Volume Mute
-//12h CD Volume Mute
-//14h Video Volume Mute
-//16h Aux Volume Mute
-//18h PCM Out Volume Mute
-//1Ah Record Select
-//1Ch Record Gain Mute
-//1Eh Record Gain Mic Mute
-//20h General Purpose
-//22h 3D Control
-//24h AC’97 RESERVED
-//26h Powerdown Ctrl/Stat
-//28h Extended Audio
-//2Ah Extended Audio Ctrl/Stat
-struct Ac97Mixer {
-    audio_function: Arc<Mutex<Ac97>>,
-}
-
-impl Ac97Mixer {
-    pub fn new(audio_function: Arc<Mutex<Ac97>>) -> Self {
-        Ac97Mixer {
-            audio_function,
-        }
-    }
-}
-
-impl BusDevice for Ac97Mixer {
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
-//        println!("read from mixer 0x{:x} {}", offset, data.len());
-        let mut af = self.audio_function.lock().unwrap();
-        match data.len() {
-            2 => {
-                let val: u16 = af.bm_readw(offset);
-                data[0] = val as u8;
-                data[1] = (val >> 8) as u8;
-            }
-            l => println!("wtf mixer read length of {}", l)
-        }
-    }
-
-    fn write(&mut self, offset: u64, data: &[u8]) {
-        let mut af = self.audio_function.lock().unwrap();
-        match data.len() {
-            2 => af.mix_writew(offset, data[0] as u16 | (data[1] as u16) << 8),
-            l => println!("wtf mixer write length of {}", l)
-        }
-    }
-}
-
-struct Ac97BusMaster {
-    audio_function: Arc<Mutex<Ac97>>,
-}
-
-impl Ac97BusMaster {
-    pub fn new(audio_function: Arc<Mutex<Ac97>>) -> Self {
-        Ac97BusMaster {
-            audio_function,
-        }
-    }
-}
-
+// 00h Reset
+// 02h Master Volume Mute
+// 04h Headphone Volume Mute
+// 06h Master Volume Mono Mute
+// 08h Master Tone (R & L)
+// 0Ah PC_BEEP Volume Mute
+// 0Ch Phone Volume Mute
+// 0Eh Mic Volume Mute
+// 10h Line In Volume Mute
+// 12h CD Volume Mute
+// 14h Video Volume Mute
+// 16h Aux Volume Mute
+// 18h PCM Out Volume Mute
+// 1Ah Record Select
+// 1Ch Record Gain Mute
+// 1Eh Record Gain Mic Mute
+// 20h General Purpose
+// 22h 3D Control
+// 24h AC’97 RESERVED
+// 26h Powerdown Ctrl/Stat
+// 28h Extended Audio
+// 2Ah Extended Audio Ctrl/Stat
+//
 // Bus Master regs from ICH spec:
 // 00h PI_BDBAR PCM In Buffer Descriptor list Base Address Register
 // 04h PI_CIV PCM In Current Index Value
@@ -159,8 +111,39 @@ impl Ac97BusMaster {
 // 2Ch GLOB_CNT Global Control
 // 30h GLOB_STA Global Status
 // 34h ACC_SEMA Codec Write Semaphore Register
-impl BusDevice for Ac97BusMaster {
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
+struct Ac97BusDevice {
+    audio_function: Arc<Mutex<Ac97>>,
+}
+
+impl Ac97BusDevice {
+    pub fn new(audio_function: Arc<Mutex<Ac97>>) -> Self {
+        Ac97BusDevice {
+            audio_function,
+        }
+    }
+
+    fn read_mixer(&mut self, offset: u64, data: &mut [u8]) {
+//        println!("read from mixer 0x{:x} {}", offset, data.len());
+        let mut af = self.audio_function.lock().unwrap();
+        match data.len() {
+            2 => {
+                let val: u16 = af.bm_readw(offset);
+                data[0] = val as u8;
+                data[1] = (val >> 8) as u8;
+            }
+            l => println!("wtf mixer read length of {}", l)
+        }
+    }
+
+    fn write_mixer(&mut self, offset: u64, data: &[u8]) {
+        let mut af = self.audio_function.lock().unwrap();
+        match data.len() {
+            2 => af.mix_writew(offset, data[0] as u16 | (data[1] as u16) << 8),
+            l => println!("wtf mixer write length of {}", l)
+        }
+    }
+
+    fn read_bus_master(&mut self, offset: u64, data: &mut [u8]) {
 //        println!("read from BM 0x{:x} {}", offset, data.len());
         let mut af = self.audio_function.lock().unwrap();
         match data.len() {
@@ -181,7 +164,7 @@ impl BusDevice for Ac97BusMaster {
         }
     }
 
-    fn write(&mut self, offset: u64, data: &[u8]) {
+    fn write_bus_master(&mut self, offset: u64, data: &[u8]) {
 //        println!("write to BM 0x{:x} {}", offset, data.len());
         let mut af = self.audio_function.lock().unwrap();
         match data.len() {
@@ -190,6 +173,24 @@ impl BusDevice for Ac97BusMaster {
             4 => af.bm_writel(offset, (data[0] as u32) | ((data[1] as u32) << 8) |
                                       ((data[2] as u32) << 16) | ((data[3] as u32) << 24)),
             l => println!("wtf write length of {}", l)
+        }
+    }
+}
+
+impl BusDevice for Ac97BusDevice {
+    fn read(&mut self, offset: u64, data: &mut [u8]) {
+        match offset {
+            0x1000...0x1099 => self.read_mixer(offset - 0x1000, data),
+            0x1400...0x1799 => self.read_bus_master(offset - 0x1400, data),
+            _ => (),
+        }
+    }
+
+    fn write(&mut self, offset: u64, data: &[u8]) {
+        match offset {
+            0x1000...0x1099 => self.write_mixer(offset - 0x1000, data),
+            0x1400...0x1799 => self.write_bus_master(offset - 0x1400, data),
+            _ => (),
         }
     }
 }
