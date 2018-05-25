@@ -4,9 +4,9 @@
 
 extern crate bit_field;
 
+use self::bit_field::*;
 use std;
 use std::fmt;
-use self::bit_field::*;
 
 type B0 = BitField0;
 type B1 = BitField1;
@@ -153,7 +153,9 @@ impl fmt::Display for Error {
 type Result<T> = std::result::Result<T, Error>;
 
 pub trait PrimitiveEnum {
-    fn from(val: u8) -> Result<Self> where Self: std::marker::Sized;
+    fn from(val: u8) -> Result<Self>
+    where
+        Self: std::marker::Sized;
     fn to(&self) -> u8;
 }
 
@@ -335,6 +337,8 @@ pub struct TrbSchema {
     control: B16,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct NormalTrbSchema {
     data_buffer: B64,
     trb_transfer_length: B17,
@@ -352,6 +356,9 @@ pub struct NormalTrbSchema {
     trb_type: B6,
     reserved1: B16,
 }
+
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 
 pub struct SetupStageTrbSchema {
     request_type: B8,
@@ -372,6 +379,9 @@ pub struct SetupStageTrbSchema {
     reserved3: B14,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
+
 pub struct DataStageTrbSchema {
     data_buffer_pointer: B64,
     trb_transfer_length: B17,
@@ -390,6 +400,8 @@ pub struct DataStageTrbSchema {
     reserved1: B15,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct StatusStageTrbSchema {
     reserved0: B64,
     reserved1: B22,
@@ -405,6 +417,8 @@ pub struct StatusStageTrbSchema {
     reserved4: B15,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct IsochTrbSchema {
     data_buffer_pointer: B64,
     trb_transfer_length: B17,
@@ -413,6 +427,7 @@ pub struct IsochTrbSchema {
     cycle: B1,
     evaulate_nex_trb: B1,
     interrupt_on_short_packet: B1,
+    no_snoop: B1,
     chain: B1,
     interrupt_on_completion: B1,
     immediate_data: B1,
@@ -424,6 +439,8 @@ pub struct IsochTrbSchema {
     sia: B1,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct LinkTrbSchema {
     ring_segment_pointer: B64,
     reserved0: B22,
@@ -438,6 +455,8 @@ pub struct LinkTrbSchema {
     reserved3: B16,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct EventDataTrbSchema {
     event_data: B64,
     reserved0: B22,
@@ -453,6 +472,8 @@ pub struct EventDataTrbSchema {
     reserved3: B16,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct NoopTrbSchema {
     reserved0: B64,
     reserved1: B22,
@@ -467,6 +488,8 @@ pub struct NoopTrbSchema {
     reserved4: B16,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct DisableSlotCommandTrbSchema {
     reserved0: B32,
     reserved1: B32,
@@ -478,6 +501,8 @@ pub struct DisableSlotCommandTrbSchema {
     slot_id: B8,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct AddressDeviceCommandTrbSchema {
     input_context_pointer: B64,
     reserved: B32,
@@ -489,6 +514,8 @@ pub struct AddressDeviceCommandTrbSchema {
     slot_id: B8,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct ConfigureEndpointCommandTrbSchema {
     input_context_pointer: B64,
     reserved0: B32,
@@ -500,6 +527,8 @@ pub struct ConfigureEndpointCommandTrbSchema {
     slot_id: B8,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct EvaluateContextCommandTrbSchema {
     input_context_pointer: B64,
     reserved0: B32,
@@ -510,6 +539,8 @@ pub struct EvaluateContextCommandTrbSchema {
     slot_id: B8,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct ResetDeviceCommandTrbSchema {
     reserved0: B32,
     reserved1: B32,
@@ -521,6 +552,8 @@ pub struct ResetDeviceCommandTrbSchema {
     slot_id: B8,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct TransferEventTrbSchema {
     trb_pointer: B64,
     trb_transfer_length: B24,
@@ -535,6 +568,8 @@ pub struct TransferEventTrbSchema {
     slot_id: B8,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct CommandCompletionEventTrbSchema {
     trb_pointer: B64,
     command_completion_parameter: B24,
@@ -546,6 +581,8 @@ pub struct CommandCompletionEventTrbSchema {
     slot_id: B8,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct PortStatusChangeEventTrbSchema {
     reserved0: B24,
     port_id: B8,
@@ -558,12 +595,16 @@ pub struct PortStatusChangeEventTrbSchema {
     reserved4: B16,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct EventRingSegmentTableEntrySchema {
     ring_segment_base_address: B64,
     ring_segment_size: B16,
     reserved2: B48,
 }
 
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct InputControlContextSchema {
     // Xhci spec 6.2.5.1.
     drop_context_flags: B32,
@@ -583,6 +624,7 @@ pub struct InputControlContextSchema {
 const DEVICE_CONTEXT_ENTRY_SIZE: usize = 32usize;
 
 #[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct SlotContextSchema {
     route_string: B20,
     speed: B4,
@@ -608,6 +650,7 @@ pub struct SlotContextSchema {
 }
 
 #[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
 pub struct EndpointContextSchema {
     endpoint_state: B3,
     reserved1: B5,
@@ -644,4 +687,36 @@ pub struct DeviceContext {
 pub struct AddressedTrb {
     trb: Trb,
     gpa: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_struct_sizes() {
+        assert_eq!(std::mem::size_of::<Trb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<NormalTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<SetupStageTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<DataStageTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<StatusStageTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<IsochTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<LinkTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<EventDataTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<NoopTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<DisableSlotCommandTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<AddressDeviceCommandTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<ConfigureEndpointCommandTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<EvaluateContextCommandTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<ResetDeviceCommandTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<TransferEventTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<CommandCompletionEventTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<PortStatusChangeEventTrb>(), TRB_SIZE);
+
+        assert_eq!(std::mem::size_of::<EventRingSegmentTableEntry>(), 16);
+        assert_eq!(std::mem::size_of::<InputControlContext>(), 32);
+        assert_eq!(std::mem::size_of::<SlotContext>(), DEVICE_CONTEXT_ENTRY_SIZE);
+        assert_eq!(std::mem::size_of::<EndpointContext>(), DEVICE_CONTEXT_ENTRY_SIZE);
+        assert_eq!(std::mem::size_of::<DeviceContext>(), 32 * DEVICE_CONTEXT_ENTRY_SIZE);
+    }
 }
