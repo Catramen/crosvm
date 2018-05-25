@@ -9,6 +9,7 @@ wl-dmabuf = []
 [dependencies]
 byteorder = "*"
 data_model = { path = "../data_model" }
+bit_field = { path = "../bit_field" }
 libc = "*"
 io_jail = { path = "../io_jail" }
 net_sys = { path = "../net_sys" }
