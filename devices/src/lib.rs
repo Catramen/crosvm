@@ -23,6 +23,7 @@ mod proxy;
 mod serial;
 pub mod pl030;
 pub mod virtio;
+pub mod usb;
 
 pub use self::bus::{Bus, BusDevice};
 pub use self::cmos::Cmos;
