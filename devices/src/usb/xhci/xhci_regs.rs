@@ -80,6 +80,7 @@ pub struct Register {
     size: u8,
     reset_value: u64,
     value: mut u64,
+    guest_writeable_mask: u64,
 }
 
 impl Register {
@@ -123,12 +124,17 @@ impl RegisterInterface for RegisterInterface {
     fn write_reg(&mut self, addr: BarOffset, data: &[u8]) -> BarRange {
         let (offset, size) = self.get_rw_offset_and_size(addr, data.len());
         for i in 0..size {
-            self.set_byte(
+            self.set_byte(offset + i, data[i]);
         }
+        // TODO(jkwang) call callback function.
     }
 
     fn read_reg(&self, addr: BarOffset, data: &mut [u8]) -> BarRange {
-
+        let (offset, size) = self.get_rw_offset_and_size(addr, data.len());
+        for i in 0..size {
+            data[i] = self.get_byte(offset + i);
+        }
+        // TODO(jkwang) call callback function.
     }
 
     fn set_write_callback(&self);
@@ -141,12 +147,43 @@ pub struct RegisterArray {
 }
 
 pub struct XhciMmioRegs {
-    regs: Vec<mut Box<RegisterInterface>>,
+    regs: BTreeMap<BusRange, Box<RegisterInterface>>,
 }
 
 impl XhciMmioRegs {
-    pub fn reset_all();
-    pub fn read_bar(&mut self, addr: u64, data: &mut [u8]);
-    pub fn write_bar(&mut self, addr: u64, data: &[u8]);
-    pub fn get_register();
+    pub fn new() -> XhciMmioRegs {
+        // All register data are hard coded here.
+    }
+
+    pub fn reset_all() {
+    }
+
+    pub fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
+
+    }
+
+    pub fn write_bar(&mut self, addr: u64, data: &[u8]) {
+    }
+
+    pub fn get_register(&self, ) {
+    }
+
+    fn insert_regs {
+    }
+
+    fn first_before(&self, addr: BarOffset) -> &mut RegisterInterface {
+        // for when we switch to rustc 1.17: self.devices.range(..addr).iter().rev().next()
+        for (range, reg) in self.regs.iter().rev() {
+            if range.0 <= addr {
+                return &reg
+            }
+        }
+        debug_assert!(false);
+    }
+
+    fn get_register_range(&self, name: &'static str) -> BarRange {
+
+    }
 }
+
+
