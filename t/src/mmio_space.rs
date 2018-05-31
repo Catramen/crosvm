@@ -118,7 +118,9 @@ impl MMIOSpace {
             }
         }
         for r in read_regs {
-            r.callback.read_reg_callback(self);
+            if let Some(ref cb) = r.callback {
+                cb.read_reg_callback(self);
+            }
         }
         for idx in 0..(data.len() as BarOffset) {
             data[idx as usize] = self.get_byte(addr + idx);
@@ -136,7 +138,9 @@ impl MMIOSpace {
                 }
                 offset += idx;
                 let val = reg.get_value(self);
-                reg.callback.write_reg_callback(self, val);
+                if let Some(ref cb) = reg.callback {
+                    cb.write_reg_callback(self, val);
+                }
             } else {
                 offset = offset + 1;
             }
@@ -169,9 +173,7 @@ pub trait RegisterCallback {
     fn read_reg_callback(&self, _mmio_space: &mut MMIOSpace) {}
 }
 
-pub struct DefaultCallback;
-impl RegisterCallback for DefaultCallback {}
-
+// TODO refactor Register with enum to better support Register array!
 // Register is a piece (typically u8 to u64) of memory in MMIO Space. This struct
 // denotes all information regarding to the register definition.
 pub struct Register {
@@ -180,11 +182,36 @@ pub struct Register {
     reset_value: u64,
     // Only masked bits could be written by guest.
     guest_writeable_mask: u64,
-    callback: Box<RegisterCallback>,
+    // When write 1 to bits masked, those bits will be cleared. See Xhci spec 5.1
+    // for more details.
+    guest_write_1_to_clear_mask: u64,
+    callback: Option<Box<RegisterCallback>>,
 }
 
 // All methods of Register should take '&self' rather than '&mut self'.
 impl Register {
+    pub fn new_ro(offset: BarOffset, size: BarOffset, reset_value: u64) -> Register {
+        Register {
+            offset: offset,
+            size: size,
+            reset_value: reset_value,
+            guest_writeable_mask: 0,
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
+        }
+    }
+
+    pub fn new_with_callback(offset: BarOffset, size: BarOffset, reset_value: u64, callback: Option<Box<RegisterCallback>>) -> Register {
+        Register {
+            offset: offset,
+            size: size,
+            reset_value: reset_value,
+            guest_writeable_mask: !0,
+            guest_write_1_to_clear_mask: 0,
+            callback: callback,
+        }
+    }
+
     pub fn get_bar_range(&self) -> BarRange {
         BarRange(self.offset, self.offset + self.size)
     }
@@ -195,9 +222,13 @@ impl Register {
         debug_assert!(offset - self.offset < self.size);
         debug_assert!(self.size <= 8);
         let byte_offset = offset - self.offset;
-        let mask = (self.guest_writeable_mask >> (byte_offset * 8)) as u8;
         let original_val = mmio_space.get_byte(offset);
-        let new_val = (original_val & (!mask)) | (val & mask);
+        // Mask with w1c mask.
+        let w1c_mask = (self.guest_write_1_to_clear_mask >> (byte_offset * 8)) as u8;
+        let val = (!w1c_mask & val) | (w1c_mask & original_val & !val);
+        // Mask with writable mask.
+        let w_mask = (self.guest_writeable_mask >> (byte_offset * 8)) as u8;
+        let new_val = (original_val & (!w_mask)) | (val & w_mask);
         mmio_space.set_byte(offset, new_val);
     }
 
@@ -226,7 +257,17 @@ impl Register {
         }
     }
 
-    pub fn set_bit(&self, _mmio_space: &mut MMIOSpace) {
+    pub fn set_bit(&self, _mmio_space: &mut MMIOSpace, _mask: u64) {
+        //let mut val = self.get_value(mmioSpace);
+        // TODO more......
+    }
+
+    pub fn get_bit(&self, _mmio_space: &mut MMIOSpace, _mask: u64) {
+        //let mut val = self.get_value(mmioSpace);
+        // TODO more......
+    }
+
+    pub fn set_to_clear(&self, _mmio_space: &mut MMIOSpace, _mask: u64) {
         //let mut val = self.get_value(mmioSpace);
         // TODO more......
     }
@@ -245,7 +286,8 @@ mod tests {
             size: 4,
             reset_value: 0,
             guest_writeable_mask: 0,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         assert_eq!(mmio.get_size(), 4);
         mmio.add_reg(Register {
@@ -253,7 +295,8 @@ mod tests {
             size: 8,
             reset_value: 0,
             guest_writeable_mask: 0,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         assert_eq!(mmio.get_size(), 40);
         mmio.add_reg(Register {
@@ -261,7 +304,8 @@ mod tests {
             size: 4,
             reset_value: 0,
             guest_writeable_mask: 0,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         assert_eq!(mmio.get_size(), 40);
     }
@@ -274,14 +318,16 @@ mod tests {
             size: 4,
             reset_value: 0,
             guest_writeable_mask: 0,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         let reg2 = mmio.add_reg(Register {
             offset: 32,
             size: 1,
             reset_value: 0,
             guest_writeable_mask: 0,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         assert_eq!(reg1.get_value(&mmio), 0);
         assert_eq!(reg2.get_value(&mmio), 0);
@@ -307,7 +353,8 @@ mod tests {
             size: 1,
             reset_value: 0xf0,
             guest_writeable_mask: 0,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
 
         assert_eq!(reg1.get_value(&mmio), 0);
@@ -323,14 +370,16 @@ mod tests {
             size: 1,
             reset_value: 0xf0,
             guest_writeable_mask: 0,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         let reg2 = mmio.add_reg(Register {
             offset: 4,
             size: 2,
             reset_value: 0x0,
             guest_writeable_mask: 0b10,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         assert_eq!(reg1.get_value(&mmio), 0);
         reg1.set_value_guest(&mut mmio, 0xffffff);
@@ -341,8 +390,35 @@ mod tests {
         reg2.set_value_guest(&mut mmio, 0x0);
         assert_eq!(reg2.get_value(&mmio), 0xff & (!0b10));
         reg2.set_value_device(&mut mmio, 0b1);
-        reg2.set_value_guest(&mut mmio, 0xff);
+        reg2.set_value_guest(&mut mmio, 0xffff);
         assert_eq!(reg2.get_value(&mmio), 0b11);
+    }
+
+    #[test]
+    fn mmio_reg_write_1_to_clear_mask() {
+        let mut mmio = MMIOSpace::new();
+        let reg1 = mmio.add_reg(Register {
+            offset: 3,
+            size: 1,
+            reset_value: 0xf0,
+            guest_writeable_mask: 0b1,
+            guest_write_1_to_clear_mask: 0b1,
+            callback: None,
+        });
+        let reg2 = mmio.add_reg(Register {
+            offset: 4,
+            size: 2,
+            reset_value: 0x0,
+            guest_writeable_mask: 0b11,
+            guest_write_1_to_clear_mask: 0b01,
+            callback: None,
+        });
+        reg1.set_value_device(&mut mmio, 0xff);
+        reg1.set_value_guest(&mut mmio, 0xffff);
+        assert_eq!(reg1.get_value(&mmio), 0xfe);
+        reg2.set_value_device(&mut mmio, 0b1);
+        reg2.set_value_guest(&mut mmio, 0xffff);
+        assert_eq!(reg2.get_value(&mmio), 0b10);
     }
 
     #[test]
@@ -353,14 +429,16 @@ mod tests {
             size: 1,
             reset_value: 0xf0,
             guest_writeable_mask: 0,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         let reg2 = mmio.add_reg(Register {
             offset: 4,
             size: 2,
             reset_value: 0x0,
             guest_writeable_mask: 0b10,
-            callback: Box::new(DefaultCallback {}),
+            guest_write_1_to_clear_mask: 0,
+            callback: None,
         });
         let mut buffer: [u8; 4] = [0; 4];
         mmio.read_bar(0, &mut buffer);
@@ -405,7 +483,7 @@ mod tests {
 
     impl RegisterCallback for RegCallback {
         fn write_reg_callback(&self, _: &mut MMIOSpace, val: u64) {
-            self.device_state.borrow_mut().state += (val as u8);
+            self.device_state.borrow_mut().state += val as u8;
         }
 
         fn read_reg_callback(&self, _: &mut MMIOSpace) {
@@ -423,12 +501,13 @@ mod tests {
                 size: 2,
                 reset_value: 0x0,
                 guest_writeable_mask: 0xf,
-                callback: Box::new(RegCallback {
+                guest_write_1_to_clear_mask: 0,
+                callback: Some(Box::new(RegCallback {
                     device_state: Rc::clone(&device_state),
-                }),
+                })),
             });
 
-            let mut d = Device {
+            let d = Device {
                 mmio_space: mmio,
                 state: device_state,
                 reg1: reg1,
