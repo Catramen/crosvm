@@ -2,188 +2,212 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::mem;
-use std::cmp::{Ord, PartialOrd, PartialEq, Ordering};
-use std::collections::btree_map::BTreeMap;
+const XHCI_CAPLENGTH: u64 = 0x20;
+const XHCI_DBOFF: u64 = 0x00002000;
+const XHCI_RTSOFF: u64 = 0x00003000;
 
-type BarOffset = u64;
 
-// This represents a range of memory in the MMIO space starting from Bar.
-// BarRange.0 is inclusive, BarRange.1 is exclusive.
-#[derive(Debug, Copy, Clone)]
-struct BarRange(u64, u64);
-
-impl Eq for BarRange {}
-
-impl PartialEq for BarRange {
-    fn eq(&self, other: &BarRange) -> bool {
-        self.0 == other.0
-    }
+fn add_reg_array<C: RegisterCallback>(base: BarOffset, stride: BarOffset,
+                                      reg_template: Register, callback: C) {
 }
 
-impl Ord for BarRange {
-    fn cmp(&self, other: &BarRange) -> Ordering {
-        self.0.cmp(&other.0)
-    }
+// This function returns mmio space definition for xhci. See Xhci spec chapter 5
+// for details.
+pub fn get_xhci_mmio_space(xhci_state: Rc<RefCell<XhciState>>) -> MMIOSpace {
+    let mut mmio = MMIO::new();
+    /**************************************************************************/ 
+    /***************** Host Controller Capability Registers *******************/
+    mmio.add_reg(
+        // CAPLENGTH
+        Register::new_ro(
+            0x00, // bar offset
+            1,    // size
+            XHCI_CAPLENGTH, // Operation register start at offset 0x20
+            )
+        );
+    mmio.add_reg(
+        // HCIVERSION
+        Register::new_ro(
+            0x02,  // bar offset
+            2,     // size
+            0x0110,// Revision 1.1
+            )
+        );
+    mmio.add_reg(
+        // HCSPARAMS1
+        Register::new_ro(
+            0x04, // bar offset
+            4,    // size
+            0x08000108, // max_slots = 8, max_interrupters = 1, max_ports = 8
+            )
+        );
+
+    mmio.add_reg(
+        // HCSPARAMS2
+        Register::new_ro(
+            0x08, // bar offset
+            4,    // size
+            // Maximum number of event ring segment table entries = 32k
+            // No scratchpad buffers.
+            0xf0,
+            )
+        );
+
+    mmio.add_reg(
+        // HCSPARAM3
+        Register::new_ro(
+            0x0c, // bar offset
+            4,    // size
+
+            // Exit latencies for U1 (standby with fast exit) and U2 (standby with
+            // slower exit) power states. We use the max values:
+            // - U1 to U0: < 10 us
+            // - U2 to U1: < 2047 us
+            0x07FF000A,
+            )
+        );
+
+    mmio.add_reg(
+        // HCCPARAMS1
+        Register::new_ro(
+            0x10, // bar offset
+            4,    // size
+
+            // Supports 64 bit addressing
+            // Max primary stream array size = 0 (streams not supported).
+            // Extended capabilities pointer = 0xC000 offset from base.
+            0x30000501
+            )
+        );
+    mmio.add_reg(
+        // DBOFF
+        Register::new_ro(
+            0x14, // bar offset
+            4,    // size
+            XHCI_DBOFF, // Doorbell array offset 0x2000 from base.
+            )
+        );
+
+    mmio.add_reg(
+        // RTSOFF
+        Register::new_ro(
+            0x18, // bar offset
+            4,    // size
+            XHCI_RTSOFF, // Runtime registers offset 0x3000 from base.
+            )
+        );
+
+    mmio.add_reg(
+        // HCCPARAMS2
+        Register::new_ro(
+            0x1c, // bar offset
+            4,    // size
+            0,
+            )
+        );
+    /************** End of Host Controller Capability Registers ***************/
+    /**************************************************************************/ 
+
+    /**************************************************************************/ 
+    /***************** Host Controller Operational Registers ******************/
+    mmio.add_reg(
+        Register::new_ro(
+            0x18, // bar offset
+            4,    // size
+            0x20, //
+            )
+        );
+    /************** End of Host Controller Operational Registers **************/
+    /**************************************************************************/ 
+
+
+    /**************************************************************************/ 
+    /********************** Extended Capability Registers *********************/
+
+    // Extended capability registers. Base offset defined by hccparams1.
+    // Each set of 4 registers represents a "Supported Protocol" extended
+    // capability.  The first capability indicates that ports 1-4 are USB 2.0 and
+    // the second capability indicates that ports 5-8 are USB 3.0.
+    mmio.add_reg(
+        // spcap 1.1
+        Register::new_ro(
+            0xc000, // bar offset
+            4,    // size
+            // "Supported Protocol" capability.
+            // Next capability at 0x40 dwords offset.
+            // USB 2.0.
+            0x20,
+            )
+        );
+    mmio.add_reg(
+        // spcap 1.2
+        Register::new_ro(
+            0xc004, // bar offset
+            4,    // size
+            0x20425355, // Name string = "USB "
+            )
+        );
+    mmio.add_reg(
+        // spcap 1.3
+        Register::new_ro(
+            0xc008, // bar offset
+            4,    // size
+            0x00000401, // 4 ports starting at port 1.
+            )
+        );
+
+    mmio.add_reg(
+        // spcap 1.4
+        Register::new_ro(
+            0xc00c, // bar offset
+            4,    // size
+            // The specification says that this shall be set to 0 with no explanation.
+            // Section 7.2.2.1.4.
+            0,
+            )
+        );
+
+    mmio.add_reg(
+        // spcap 2.1
+        Register::new_ro(
+            0xc100, // bar offset
+            4,    // size
+            // "Supported Protocol" capability.
+            // No pointer to next capability.
+            // USB 3.0.
+            0x03000002,
+            )
+        );
+
+    mmio.add_reg(
+        // spcap 2.2
+        Register::new_ro(
+            0xc104, // bar offset
+            4,    // size
+            0x20425355, // Name string = "USB "
+            )
+        );
+
+    mmio.add_reg(
+        // spcap 2.3
+        Register::new_ro(
+            0xc108, // bar offset
+            4,    // size
+            0x00000405, // 4 ports starting at port 5
+            )
+        );
+
+    mmio.add_reg(
+        // spcap 2.4
+        Register::new_ro(
+            0xc10c, // bar offset
+            4,    // size
+            // The specification says that this shall be set to 0 with no explanation.
+            // Section 7.2.2.1.4.
+            0,
+            )
+        );
+    /************** End of Host Controller Operational Registers **************/
+    /**************************************************************************/
 }
-
-impl PartialOrd for BarRange {
-    fn partial_cmp(&self, other: &BarRange) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
-    }
-}
-
-impl BarRange {
-    // Subtract 'other' range from this range and return the result.
-    // 'self' is the range we want to operate on.
-    // 'other' is the range we operated on.
-    // return value is the remaining range.
-    // example:
-    // self = BarRange(A, B), other = BarRange(C, D), return will be BarRange(D,B).
-    //     A          B
-    //     |----------|
-    // C        D
-    // |--------|
-    //          |-----| <- we still need to deal with this range.
-    // We require C <= A and D >= B. ( We are dealing with mem operations from
-    // low address to high address.)
-    // If all operations of range(A,B) is fullfilled by range(C,D), this function
-    // will return None.
-    fn subtract(&self, other: &BarRange) -> Option<BarRange> {
-        debug_assert!(self.0 >= other.0);
-        debug_assert!(self.0 <= other.1);
-        if self.1 <= other.1 {
-            return None
-        }
-        Some(BarRange(other.1, self.1))
-    }
-}
-
-// Interface for registers/register array in MMIO space.
-pub trait RegisterInterface {
-    fn get_name(&self) -> &'static str;
-    fn get_reset_value(&self) -> u64;
-    fn get_bar_range(&self) -> BarRange;
-    fn reset(&mut self);
-    // Write the data to into reg. Returns the range actually written.
-    fn write_reg(&mut self, addr: BarOffset, data: &[u8]) -> BarRange;
-    // Read the reg values to into data. Returns the range actually read.
-    fn read_reg(&self, addr: BarOffset, data: &mut [u8]) -> BarRange;
-    // TODO
-    fn set_write_callback(&self);
-    fn set_read_callback(&self);
-}
-
-pub struct Register {
-    name: &'static str,
-    offset: BarOffset,
-    size: u8,
-    reset_value: u64,
-    value: mut u64,
-    guest_writeable_mask: u64,
-}
-
-impl Register {
-    fn get_byte(&self, offset: BarOffset) -> u8 {
-        debug_assert!(offset < (self.size as BarOffset));
-        val >> offset as u8
-    }
-
-    fn set_byte(&mut self, offset: BarOffset, val: u8) {
-        debug_assert!(offset < (self.size as BarOffset));
-        let mut mask: u64 = !(0xff << offset);
-        self.value = self.value & mask | (val << offset);
-    }
-
-    fn get_rw_offset_and_size(&self, addr: BarOffset, len: usize) -> (u8, u8) {
-        debug_assert!(addr >= self.offset);
-        let start_offset_in_reg = addr - self.offset;
-        let remaining_size_in_reg = self.size - start_offset_in_reg;
-        let size = len < remaining_size_in_reg ? len : remaining_size_in_reg;
-        (start_offset_in_reg, size)
-    }
-}
-
-impl RegisterInterface for RegisterInterface {
-    fn get_name(&self) -> &'static str {
-        self.name
-    }
-
-    fn get_reset_value(&self) -> u64 {
-        self.reset_value
-    }
-
-    fn get_bar_range(&self) -> BarRange {
-        BarRange(offset, offset + size)
-    }
-
-    fn reset(&mut self) {
-        self.value = self.reset_value;
-    }
-
-    fn write_reg(&mut self, addr: BarOffset, data: &[u8]) -> BarRange {
-        let (offset, size) = self.get_rw_offset_and_size(addr, data.len());
-        for i in 0..size {
-            self.set_byte(offset + i, data[i]);
-        }
-        // TODO(jkwang) call callback function.
-    }
-
-    fn read_reg(&self, addr: BarOffset, data: &mut [u8]) -> BarRange {
-        let (offset, size) = self.get_rw_offset_and_size(addr, data.len());
-        for i in 0..size {
-            data[i] = self.get_byte(offset + i);
-        }
-        // TODO(jkwang) call callback function.
-    }
-
-    fn set_write_callback(&self);
-    fn set_read_callback(&self);
-}
-
-pub struct RegisterArray {
-    name: &'static str,
-
-}
-
-pub struct XhciMmioRegs {
-    regs: BTreeMap<BusRange, Box<RegisterInterface>>,
-}
-
-impl XhciMmioRegs {
-    pub fn new() -> XhciMmioRegs {
-        // All register data are hard coded here.
-    }
-
-    pub fn reset_all() {
-    }
-
-    pub fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
-
-    }
-
-    pub fn write_bar(&mut self, addr: u64, data: &[u8]) {
-    }
-
-    pub fn get_register(&self, ) {
-    }
-
-    fn insert_regs {
-    }
-
-    fn first_before(&self, addr: BarOffset) -> &mut RegisterInterface {
-        // for when we switch to rustc 1.17: self.devices.range(..addr).iter().rev().next()
-        for (range, reg) in self.regs.iter().rev() {
-            if range.0 <= addr {
-                return &reg
-            }
-        }
-        debug_assert!(false);
-    }
-
-    fn get_register_range(&self, name: &'static str) -> BarRange {
-
-    }
-}
-
 
