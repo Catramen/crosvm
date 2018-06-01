@@ -6,9 +6,12 @@ const XHCI_CAPLENGTH: u64 = 0x20;
 const XHCI_DBOFF: u64 = 0x00002000;
 const XHCI_RTSOFF: u64 = 0x00003000;
 
-
-fn add_reg_array<C: RegisterCallback>(base: BarOffset, stride: BarOffset,
-                                      reg_template: Register, callback: C) {
+struct PortscRegArrayGenerator;
+impl RegArrayGenerator for PortscRegArrayGenerator {
+    fn generate_reg(idx: usize) -> Register {
+        Register {
+        }
+    }
 }
 
 // This function returns mmio space definition for xhci. See Xhci spec chapter 5

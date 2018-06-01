@@ -70,6 +70,10 @@ impl MMIOSpace {
         reg
     }
 
+    fn add_reg_array(&mut self, generator: fn(usize) -> Register) {
+
+    }
+
     pub fn get_register(&self, addr: BarOffset) -> Option<Rc<Register>> {
         if let Some(r) = self.first_before(addr) {
             let offset = addr - r.offset;
@@ -169,7 +173,6 @@ impl MMIOSpace {
 // Implementing this trait will be desugared closure.
 pub trait RegisterCallback {
     fn write_reg_callback(&self, _mmio_space: &mut MMIOSpace, _val: u64) {}
-
     fn read_reg_callback(&self, _mmio_space: &mut MMIOSpace) {}
 }
 
