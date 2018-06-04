@@ -35,13 +35,14 @@ impl PartialOrd for BarRange {
     }
 }
 
-struct RegAndCallback {
+#[derive(Clone)]
+pub struct RegAndCallback {
     reg: &'static Register,
-    cb: Option<Box<RegisterCallback>>
+    cb: Option<&'static RegisterCallback>
 }
 
 impl RegAndCallback {
-    pub fn new(reg: Register) -> RegAndCallback {
+    pub fn new(reg:&'static Register) -> RegAndCallback {
         RegAndCallback {
             reg: reg,
             cb: None,
@@ -102,11 +103,11 @@ impl MMIOSpace {
         v
     }
 
-    fn first_before(&self, addr: BarOffset) -> Option<&RegAndCallback> {
+    fn first_before(&self, addr: BarOffset) -> Option<RegAndCallback> {
         // for when we switch to rustc 1.17: self.devices.range(..addr).iter().rev().next()
         for (range, r) in self.registers.iter().rev() {
             if range.0 <= addr {
-                return Some(&r);
+                return Some(r.clone());
             }
         }
         None
@@ -121,11 +122,11 @@ impl MMIOSpace {
 
     pub fn read_bar(&mut self, addr: BarOffset, data: &mut [u8]) {
         let mut offset: BarOffset = 0;
-        let mut read_cbs = Vec::<&Box<RegisterCallback>>::new();
+        let mut read_cbs = Vec::<&'static RegisterCallback>::new();
         while offset < data.len() as BarOffset {
             if let Some(ref rc) = self.get_register(addr + offset) {
                 offset += rc.reg.size;
-                if let Some(ref cb) = rc.cb {
+                if let Some(cb) = rc.cb {
                     read_cbs.push(cb);
                 }
             } else {
@@ -178,6 +179,15 @@ impl MMIOSpace {
         }
         self.data[addr as usize]
     }
+}
+
+macro_rules! add_reg {
+    ($mmio:ident, $reg_name:ident, $def:expr) => {{
+    #[allow(non_upper_case_globals)]
+    static $reg_name: Register = $def;
+    $mmio.add_reg(&$reg_name);
+    &$reg_name
+}}
 }
 
 // Implementing this trait will be desugared closure.
@@ -318,7 +328,7 @@ mod tests {
     #[test]
     fn mmio_add_reg() {
         let mut mmio = MMIOSpace::new();
-        mmio.add_reg(&Register {
+        add_reg!(mmio, reg1, Register {
             offset: 0,
             size: 4,
             reset_value: 0,
@@ -326,7 +336,7 @@ mod tests {
             guest_write_1_to_clear_mask: 0,
         });
         assert_eq!(mmio.get_size(), 4);
-        mmio.add_reg(&Register {
+        add_reg!(mmio, reg2, Register {
             offset: 32,
             size: 8,
             reset_value: 0,
@@ -334,7 +344,7 @@ mod tests {
             guest_write_1_to_clear_mask: 0,
         });
         assert_eq!(mmio.get_size(), 40);
-        mmio.add_reg(&Register {
+        add_reg!(mmio, reg3, Register {
             offset: 4,
             size: 4,
             reset_value: 0,
@@ -347,14 +357,14 @@ mod tests {
     #[test]
     fn mmio_reg_read_write() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = mmio.add_reg(&Register {
+        let reg1 = add_reg!(mmio, reg1, Register {
             offset: 0,
             size: 4,
             reset_value: 0,
             guest_writeable_mask: 0,
             guest_write_1_to_clear_mask: 0,
         });
-        let reg2 = mmio.add_reg(&Register {
+        let reg2 = add_reg!(mmio, reg2, Register {
             offset: 32,
             size: 1,
             reset_value: 0,
@@ -380,7 +390,7 @@ mod tests {
     #[test]
     fn mmio_reg_reset() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = mmio.add_reg(&Register {
+        let reg1 = add_reg!(mmio, reg1, Register {
             offset: 3,
             size: 1,
             reset_value: 0xf0,
@@ -396,14 +406,14 @@ mod tests {
     #[test]
     fn mmio_reg_guest_mask() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = mmio.add_reg(&Register {
+        let reg1 = add_reg!(mmio, reg1, Register {
             offset: 3,
             size: 1,
             reset_value: 0xf0,
             guest_writeable_mask: 0,
             guest_write_1_to_clear_mask: 0,
         });
-        let reg2 = mmio.add_reg(&Register {
+        let reg2 = add_reg!(mmio, reg2, Register {
             offset: 4,
             size: 2,
             reset_value: 0x0,
@@ -426,14 +436,14 @@ mod tests {
     #[test]
     fn mmio_reg_write_1_to_clear_mask() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = mmio.add_reg(&Register {
+        let reg1 = add_reg!(mmio, reg1, Register {
             offset: 3,
             size: 1,
             reset_value: 0xf0,
             guest_writeable_mask: 0b1,
             guest_write_1_to_clear_mask: 0b1,
         });
-        let reg2 = mmio.add_reg(&Register {
+        let reg2 = add_reg!(mmio, reg2, Register {
             offset: 4,
             size: 2,
             reset_value: 0x0,
@@ -451,14 +461,14 @@ mod tests {
     #[test]
     fn mmio_bar_rw() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = mmio.add_reg(&Register {
+        let reg1 = add_reg!(mmio, reg1, Register {
             offset: 3,
             size: 1,
             reset_value: 0xf0,
             guest_writeable_mask: 0,
             guest_write_1_to_clear_mask: 0,
         });
-        let reg2 = mmio.add_reg(&Register {
+        let reg2 = add_reg!(mmio, reg2, Register {
             offset: 4,
             size: 2,
             reset_value: 0x0,
@@ -499,7 +509,7 @@ mod tests {
     struct Device {
         mmio_space: MMIOSpace,
         state: Rc<RefCell<DeviceState>>,
-        reg1: Rc<Register>,
+        reg1: &'static Register,
     }
 
     reg_cb!(RegCallback, DeviceState);
@@ -519,7 +529,7 @@ mod tests {
             let device_state =
                 Rc::<RefCell<DeviceState>>::new(RefCell::new(DeviceState { state: 0 }));
             let mut mmio = MMIOSpace::new();
-            let reg1 = mmio.add_reg(&Register {
+            let reg1 = add_reg!(mmio, reg1, Register {
                 offset: 4,
                 size: 2,
                 reset_value: 0x0,
