@@ -173,6 +173,34 @@ pub trait RegisterCallback {
     fn read_reg_callback(&self, _mmio_space: &mut MMIOSpace) {}
 }
 
+macro_rules! define_reg_callback {
+    ( $name:ident, $state_name:ident, write_callback(mmio, val)=$write:block, read_callback=$read:block) => {
+        {
+            struct $name {
+                device_state: Rc<RefCell<$device_state>>,
+            }
+            impl RegisterCallback for $name {
+                fn write_reg_callback(&self, _: &mut MMIOSpace, val: u64) $write
+
+                    fn read_reg_callback(&self, _: &mut MMIOSpace) $read
+            }
+        }
+    };
+
+    ( $name:ident, $state_name:ident, write_callback(mmio, val)=$write:block) => {
+        {
+            struct $name {
+                device_state: Rc<RefCell<$device_state>>,
+            }
+            impl RegisterCallback for $name {
+                fn write_reg_callback(&self, mmio: &mut MMIOSpace, val: u64) $write
+
+                fn read_reg_callback(&self, _: &mut MMIOSpace) {}
+            }
+        }
+    };
+}
+
 // TODO refactor Register with enum to better support Register array!
 // Register is a piece (typically u8 to u64) of memory in MMIO Space. This struct
 // denotes all information regarding to the register definition.

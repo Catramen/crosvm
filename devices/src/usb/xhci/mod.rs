@@ -8,5 +8,6 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 mod xhci_abi;
+mod mmio_space;
 
 pub use self::xhci_abi::*;

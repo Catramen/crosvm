@@ -536,5 +536,4 @@ mod tests {
         d.mmio_space.read_bar(4, &mut read_buffer);
         assert_eq!(d.state.borrow().state, 0xf0 - 1);
     }
-
 }

@@ -1,0 +1,8 @@
+[package]
+name = "t"
+version = "0.1.0"
+authors = ["Jingkui Wang <jkwang@google.com>"]
+
+[dependencies]
+bit_field = { path = "../bit_field" }
+

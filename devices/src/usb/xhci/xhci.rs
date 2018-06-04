@@ -13,11 +13,11 @@ use sys_util::EventFd;
 const PCI_VENDOR_ID_REDHAT: u16 = 0x1036;
 const PCI_DEVICE_ID_REDHAT_XHCI: u16 = 0x000d;
 
-pub struct XHCIDev {
+pub struct XHCIDevice {
     config_regs: PciConfiguration,
 }
 
-impl XHCIDev {
+impl XHCIDevice {
     pub fn new() -> Self {
         let mut config_regs = PciConfiguration::new(PCI_VENDOR_ID_REDHAT,
                                                     PCI_DEVICE_ID_REDHAT_XHCI,
@@ -28,13 +28,13 @@ impl XHCIDev {
                                                     PciHeaderType::Device);
 
         // TODO(jkwang)Set irq/MSI?.
-        XHCIDev {
+        XHCIDevice {
             config_regs,
         }
     }
 }
 
-impl PciDevice for XHCIDev {
+impl PciDevice for XHCIDevice {
     fn allocate_io_bars(
         &mut self,
         mut allocate: impl FnMut(u64) -> Option<u64>,
