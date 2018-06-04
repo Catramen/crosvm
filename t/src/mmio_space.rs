@@ -5,6 +5,8 @@
 use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::btree_map::BTreeMap;
 use std::rc::Rc;
+use std::cell::RefCell;
+use std::marker::PhantomData;
 
 type BarOffset = u64;
 
@@ -70,8 +72,8 @@ impl MMIOSpace {
         reg
     }
 
-    fn add_reg_array<T: RegArrayGenerator>(&mut self, gen: &T) {
-        for i in 0..<gen as RegArrayGenerator>::REG_COUNT {
+    fn add_reg_array<T, C: RegArrayCallback<T>>(&mut self, gen: RegArrayGenerator<T, C>) {
+        for i in 0..gen.reg_count {
             self.add_reg(gen.generate_reg(i));
         }
     }
@@ -187,65 +189,33 @@ macro_rules! reg_cb {
     };
 }
 
-pub trait RegArrayGenerator {
-    const REG_COUNT: usize;
-    const BASE_OFFSET: BarOffset;
-    const STRIDE: BarOffset; // Stride of the register in bytes.
-    const SIZE: BarOffset;
-    const RESET_VALUE: u64;
-    const GUEST_WRITEABLE_MASK: u64,
-    const GUEST_WRITE_1_TO_CLEAR_MASK: u64,
-    fn generate_reg(&self, idx: usize) -> Register;
+pub struct RegArrayGenerator <T, C: RegArrayCallback<T>>{
+    reg_count: usize,
+    base_offset: BarOffset,
+    stride: BarOffset, // Stride of the register in bytes.
+    size: BarOffset,
+    reset_value: u64,
+    guest_writeable_mask: u64,
+    guest_write_1_to_clear_mask: u64,
+    device_state: Rc<RefCell<T>>,
+    phantom: PhantomData<C>,
 }
 
-macro_rules! reg_array_cb {
-    ($cb_name:ident, $state_name:ident, $gen_name: ident,
-     {
-         reg_count: $reg_count:expr,
-         base_offset: $base_offset:expr,
-         stride: $stride:expr,
-         size: $size:expr,
-         reset_value: $reset_value:expr,
-         guest_writeable_mask: $gwm:expr,
-         guest_write_1_to_clear_mask: $gw1tcm:expr,
-     }
-     ) => {
-        struct $gen_name {
-            device_state: Rc<RefCell<XhciState>>,
+pub trait RegArrayCallback<T> {
+    fn new(idx: usize, state: Rc<RefCell<T>>) -> Box<RegisterCallback>;
+}
+
+impl  <T, C: RegArrayCallback<T>> RegArrayGenerator<T, C> {
+    fn generate_reg(&self, idx: usize) -> Register {
+        Register {
+            offset: self.base_offset + self.stride * (idx as BarOffset),
+            size: self.size,
+            reset_value: self.reset_value,
+            guest_writeable_mask: self.guest_writeable_mask,
+            guest_write_1_to_clear_mask: self.guest_write_1_to_clear_mask,
+            callback: Some(C::new(idx, Rc::clone(&self.device_state))),
         }
-
-        impl RegArrayGenerator for $gen_name {
-            const REG_COUNT = $reg_count;
-            fn generate_reg(&self, idx: usize) -> Register {
-                const BASE_OFFSET: BarOffset = $base_offset;
-                const STRIDE: BarOffset = $stride;
-                const SIZE: BarOffset = $size;
-                const RESET_VALUE: BarOffset = $reset_value;
-                const GUEST_WRITEABLE_MASK: u64 = $gwm;
-                const GUEST_WRITE_1_TO_CLEAR_MASK: u64 = $gw1tcm;
-
-                Register {
-                    offset: BASE_OFFSET + STRIDE * idx,
-                    size: SIZE,
-                    reset_value: RESET_VALUE,
-                    guest_writeable_mask: GUEST_WRITEABLE_MASK,
-                    guest_write_1_to_clear_mask: GUEST_WRITE_1_TO_CLEAR_MASK,
-                    callback: Some(Box::new(
-                            $cb_name {
-                                idx: idx,
-                                device_state: Rc::clone(self.device_state),
-                            }
-                            ));
-                }
-            }
-
-        }
-
-        struct $cb_name {
-            idx: usize,
-            device_state: Rc<RefCell<$state_name>>,
-        }
-    };
+    }
 }
 
 // TODO refactor Register with enum to better support Register array!
@@ -351,7 +321,6 @@ impl Register {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
 
     #[test]
     fn mmio_add_reg() {
@@ -555,13 +524,11 @@ mod tests {
     reg_cb!(RegCallback, DeviceState);
     impl RegisterCallback for RegCallback {
         fn write_reg_callback(&self, _mmio: &mut MMIOSpace, val: u64) {
-
             self.device_state.borrow_mut().state += val as u8;
         }
 
         fn read_reg_callback(&self, _mmio: &mut MMIOSpace)
         {
-
             self.device_state.borrow_mut().state -= 1;
         }
     }
@@ -608,5 +575,6 @@ mod tests {
         d.mmio_space.read_bar(4, &mut read_buffer);
         assert_eq!(d.state.borrow().state, 0xf0 - 1);
     }
+
 
 }
