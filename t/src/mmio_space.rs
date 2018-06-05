@@ -85,6 +85,14 @@ impl MMIOSpace {
         debug_assert_eq!(insert_result, true);
     }
 
+    pub fn add_callback(&mut self, reg: &'static Register, cb: &'static RegisterCallback) {
+       for (range, r) in self.registers.iter_mut() {
+            if *range == reg.get_bar_range() {
+                r.cb = Some(cb);
+            }
+        }
+    }
+
     pub fn get_register(&self, addr: BarOffset) -> Option<RegAndCallback> {
         if let Some(r) = self.first_before(addr) {
             let offset = addr - r.reg.offset;
@@ -535,10 +543,19 @@ mod tests {
                 reset_value: 0x0,
                 guest_writeable_mask: 0xf,
                 guest_write_1_to_clear_mask: 0,
-                //callback: Some(Box::new(RegCallback {
-                //    device_state: Rc::clone(&device_state),
             });
 
+            let cb = unsafe {
+                static mut callback: Option<RegCallback> = None;
+                callback = Some(RegCallback {
+                    device_state: Rc::clone(&device_state),
+                });
+                match callback {
+                    Some(ref cb) => cb,
+                    None => panic!("This should never happen!"),
+                }
+            };
+            mmio.add_callback(reg1, cb);
             let d = Device {
                 mmio_space: mmio,
                 state: device_state,
