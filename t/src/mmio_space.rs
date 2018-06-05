@@ -313,6 +313,30 @@ macro_rules! register_array {
         }
         v
     }};
+    (
+        cnt: $cnt:expr,
+        base_offset: $base_offset:expr,
+        size: $size:expr,
+        reset_value: $rv:expr,
+        guest_writeable_mask: $gwm:expr,
+        guest_write_1_to_clear_mask: $gw1tcm:expr,
+    ) => {{
+        static mut REGS: [Register; $cnt] = [Register {
+            offset: $base_offset,
+            size: $size,
+            reset_value: $rv,
+            guest_writeable_mask: $gwm,
+            guest_write_1_to_clear_mask: $gw1tcm,
+        }; $cnt];
+        let mut v: Vec<&'static Register> = Vec::new();
+        for i in 0..$cnt {
+            unsafe {
+                REGS[i].offset += ($size * i) as BarOffset;
+                v.push(&REGS[i]);
+            }
+        }
+        v
+    }};
 
 }
 
