@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use std::cell::RefCell;
 use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::btree_map::BTreeMap;
-use std::rc::Rc;
-use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 type BarOffset = u64;
 
@@ -38,15 +38,12 @@ impl PartialOrd for BarRange {
 #[derive(Clone)]
 pub struct RegAndCallback {
     reg: &'static Register,
-    cb: Option<&'static RegisterCallback>
+    cb: Option<Rc<RegisterCallback>>,
 }
 
 impl RegAndCallback {
-    pub fn new(reg:&'static Register) -> RegAndCallback {
-        RegAndCallback {
-            reg: reg,
-            cb: None,
-        }
+    pub fn new(reg: &'static Register) -> RegAndCallback {
+        RegAndCallback { reg: reg, cb: None }
     }
 }
 
@@ -68,7 +65,7 @@ impl MMIOSpace {
     }
 
     // This function should only be called when setup MMIOSpace.
-    pub fn add_reg(&mut self, reg: &'static Register) {
+    pub fn add_reg(&mut self, reg: &'static Register) -> &'static Register {
         debug_assert_eq!(self.get_register(reg.offset).is_none(), true);
         if let Some(r) = self.first_before(reg.offset + reg.size - 1) {
             debug_assert!(r.reg.offset < reg.offset);
@@ -83,12 +80,14 @@ impl MMIOSpace {
             .insert(reg.get_bar_range(), RegAndCallback::new(reg))
             .is_none();
         debug_assert_eq!(insert_result, true);
+        reg
     }
 
-    pub fn add_callback(&mut self, reg: &'static Register, cb: &'static RegisterCallback) {
-       for (range, r) in self.registers.iter_mut() {
+    pub fn add_callback(&mut self, reg: &'static Register, cb: Rc<RegisterCallback>) {
+        for (range, r) in self.registers.iter_mut() {
             if *range == reg.get_bar_range() {
                 r.cb = Some(cb);
+                return;
             }
         }
     }
@@ -130,12 +129,12 @@ impl MMIOSpace {
 
     pub fn read_bar(&mut self, addr: BarOffset, data: &mut [u8]) {
         let mut offset: BarOffset = 0;
-        let mut read_cbs = Vec::<&'static RegisterCallback>::new();
+        let mut read_cbs = Vec::<Rc<RegisterCallback>>::new();
         while offset < data.len() as BarOffset {
             if let Some(ref rc) = self.get_register(addr + offset) {
                 offset += rc.reg.size;
-                if let Some(cb) = rc.cb {
-                    read_cbs.push(cb);
+                if let Some(ref cb) = rc.cb {
+                    read_cbs.push(cb.clone());
                 }
             } else {
                 // TODO, add logging?
@@ -156,7 +155,8 @@ impl MMIOSpace {
             if let Some(ref rc) = self.get_register(addr) {
                 let mut idx: BarOffset = 0;
                 while idx < (rc.reg).size && offset + idx < data.len() as BarOffset {
-                    rc.reg.set_byte_as_guest(self, addr + idx, data[(offset + idx) as usize]);
+                    rc.reg
+                        .set_byte_as_guest(self, addr + idx, data[(offset + idx) as usize]);
                     idx = idx + 1;
                 }
                 offset += idx;
@@ -189,13 +189,24 @@ impl MMIOSpace {
     }
 }
 
-macro_rules! add_reg {
-    ($mmio:ident, $reg_name:ident, $def:expr) => {{
-    #[allow(non_upper_case_globals)]
-    static $reg_name: Register = $def;
-    $mmio.add_reg(&$reg_name);
-    &$reg_name
-}}
+macro_rules! register {
+    (
+        offset:
+        $offset:expr,size:
+        $size:expr,reset_value:
+        $rv:expr,guest_writeable_mask:
+        $gwm:expr,guest_write_1_to_clear_mask:
+        $gw1tcm:expr,
+    ) => {{
+        static REG: Register = Register {
+            offset: $offset,
+            size: $size,
+            reset_value: $rv,
+            guest_writeable_mask: $gwm,
+            guest_write_1_to_clear_mask: $gw1tcm,
+        };
+        &REG
+    }};
 }
 
 // Implementing this trait will be desugared closure.
@@ -213,7 +224,7 @@ macro_rules! reg_cb {
     };
 }
 
-pub struct RegArrayGenerator <T, C: RegArrayCallback<T>>{
+pub struct RegArrayGenerator<T, C: RegArrayCallback<T>> {
     reg_count: usize,
     base_offset: BarOffset,
     stride: BarOffset, // Stride of the register in bytes.
@@ -229,7 +240,7 @@ pub trait RegArrayCallback<T> {
     fn new(idx: usize, state: Rc<RefCell<T>>) -> Box<RegisterCallback>;
 }
 
-impl  <T, C: RegArrayCallback<T>> RegArrayGenerator<T, C> {
+impl<T, C: RegArrayCallback<T>> RegArrayGenerator<T, C> {
     fn generate_reg(&self, idx: usize) -> Register {
         Register {
             offset: self.base_offset + self.stride * (idx as BarOffset),
@@ -237,13 +248,13 @@ impl  <T, C: RegArrayCallback<T>> RegArrayGenerator<T, C> {
             reset_value: self.reset_value,
             guest_writeable_mask: self.guest_writeable_mask,
             guest_write_1_to_clear_mask: self.guest_write_1_to_clear_mask,
-    //        callback: Some(C::new(idx, Rc::clone(&self.device_state))),
+            //        callback: Some(C::new(idx, Rc::clone(&self.device_state))),
         }
     }
 }
 
 // TODO refactor Register with enum to better support Register array!
-// Register is the spec of a register in mmio space. The callback 
+// Register is the spec of a register in mmio space. The callback
 #[derive(Clone)]
 pub struct Register {
     offset: BarOffset,
@@ -336,7 +347,7 @@ mod tests {
     #[test]
     fn mmio_add_reg() {
         let mut mmio = MMIOSpace::new();
-        add_reg!(mmio, reg1, Register {
+        mmio.add_reg(register! {
             offset: 0,
             size: 4,
             reset_value: 0,
@@ -344,7 +355,7 @@ mod tests {
             guest_write_1_to_clear_mask: 0,
         });
         assert_eq!(mmio.get_size(), 4);
-        add_reg!(mmio, reg2, Register {
+        mmio.add_reg(register! {
             offset: 32,
             size: 8,
             reset_value: 0,
@@ -352,7 +363,7 @@ mod tests {
             guest_write_1_to_clear_mask: 0,
         });
         assert_eq!(mmio.get_size(), 40);
-        add_reg!(mmio, reg3, Register {
+        mmio.add_reg(register! {
             offset: 4,
             size: 4,
             reset_value: 0,
@@ -365,14 +376,14 @@ mod tests {
     #[test]
     fn mmio_reg_read_write() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = add_reg!(mmio, reg1, Register {
+        let reg1 = mmio.add_reg(register! {
             offset: 0,
             size: 4,
             reset_value: 0,
             guest_writeable_mask: 0,
             guest_write_1_to_clear_mask: 0,
         });
-        let reg2 = add_reg!(mmio, reg2, Register {
+        let reg2 = mmio.add_reg(register! {
             offset: 32,
             size: 1,
             reset_value: 0,
@@ -398,7 +409,7 @@ mod tests {
     #[test]
     fn mmio_reg_reset() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = add_reg!(mmio, reg1, Register {
+        let reg1 = mmio.add_reg(register! {
             offset: 3,
             size: 1,
             reset_value: 0xf0,
@@ -414,14 +425,14 @@ mod tests {
     #[test]
     fn mmio_reg_guest_mask() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = add_reg!(mmio, reg1, Register {
+        let reg1 = mmio.add_reg(register! {
             offset: 3,
             size: 1,
             reset_value: 0xf0,
             guest_writeable_mask: 0,
             guest_write_1_to_clear_mask: 0,
         });
-        let reg2 = add_reg!(mmio, reg2, Register {
+        let reg2 = mmio.add_reg(register! {
             offset: 4,
             size: 2,
             reset_value: 0x0,
@@ -444,14 +455,14 @@ mod tests {
     #[test]
     fn mmio_reg_write_1_to_clear_mask() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = add_reg!(mmio, reg1, Register {
+        let reg1 = mmio.add_reg(register! {
             offset: 3,
             size: 1,
             reset_value: 0xf0,
             guest_writeable_mask: 0b1,
             guest_write_1_to_clear_mask: 0b1,
         });
-        let reg2 = add_reg!(mmio, reg2, Register {
+        let reg2 = mmio.add_reg(register! {
             offset: 4,
             size: 2,
             reset_value: 0x0,
@@ -469,14 +480,14 @@ mod tests {
     #[test]
     fn mmio_bar_rw() {
         let mut mmio = MMIOSpace::new();
-        let reg1 = add_reg!(mmio, reg1, Register {
-            offset: 3,
-            size: 1,
-            reset_value: 0xf0,
-            guest_writeable_mask: 0,
-            guest_write_1_to_clear_mask: 0,
+        let reg1 = mmio.add_reg(register! {
+                 offset: 3,
+                size: 1,
+                reset_value: 0xf0,
+                guest_writeable_mask: 0,
+                guest_write_1_to_clear_mask: 0,
         });
-        let reg2 = add_reg!(mmio, reg2, Register {
+        let reg2 = mmio.add_reg(register! {
             offset: 4,
             size: 2,
             reset_value: 0x0,
@@ -512,12 +523,12 @@ mod tests {
     // effect.
     struct DeviceState {
         state: u8,
+        reg1: &'static Register,
     }
 
     struct Device {
         mmio_space: MMIOSpace,
         state: Rc<RefCell<DeviceState>>,
-        reg1: &'static Register,
     }
 
     reg_cb!(RegCallback, DeviceState);
@@ -526,40 +537,37 @@ mod tests {
             self.device_state.borrow_mut().state += val as u8;
         }
 
-        fn read_reg_callback(&self, _mmio: &mut MMIOSpace)
-        {
+        fn read_reg_callback(&self, _mmio: &mut MMIOSpace) {
             self.device_state.borrow_mut().state -= 1;
         }
     }
 
     impl Device {
         pub fn new() -> Device {
-            let device_state =
-                Rc::<RefCell<DeviceState>>::new(RefCell::new(DeviceState { state: 0 }));
-            let mut mmio = MMIOSpace::new();
-            let reg1 = add_reg!(mmio, reg1, Register {
+            let reg1 = register! {
                 offset: 4,
                 size: 2,
                 reset_value: 0x0,
                 guest_writeable_mask: 0xf,
                 guest_write_1_to_clear_mask: 0,
-            });
-
-            let cb = unsafe {
-                static mut callback: Option<RegCallback> = None;
-                callback = Some(RegCallback {
-                    device_state: Rc::clone(&device_state),
-                });
-                match callback {
-                    Some(ref cb) => cb,
-                    None => panic!("This should never happen!"),
-                }
             };
-            mmio.add_callback(reg1, cb);
+            let device_state = Rc::<RefCell<DeviceState>>::new(RefCell::new(DeviceState {
+                state: 0,
+                reg1: reg1,
+            }));
+            let mut mmio = MMIOSpace::new();
+            mmio.add_reg(reg1);
+
+            mmio.add_callback(
+                reg1,
+                Rc::new(RegCallback {
+                    device_state: Rc::clone(&device_state),
+                }),
+            );
+
             let d = Device {
                 mmio_space: mmio,
                 state: device_state,
-                reg1: reg1,
             };
             d
         }
@@ -570,18 +578,22 @@ mod tests {
         let mut d = Device::new();
         assert_eq!(d.state.borrow().state, 0);
         // No side effect when device write the register.
-        d.reg1.set_value_device(&mut d.mmio_space, 0xff);
+        d.state
+            .borrow()
+            .reg1
+            .set_value_device(&mut d.mmio_space, 0xff);
         assert_eq!(d.state.borrow().state, 0);
         // No side effect when write goes through the mask.
-        d.reg1.set_value_guest(&mut d.mmio_space, 0x0);
+        d.state
+            .borrow()
+            .reg1
+            .set_value_guest(&mut d.mmio_space, 0x0);
         assert_eq!(d.state.borrow().state, 0x0);
         // Side effect only happens when write_bar.
         d.mmio_space.write_bar(4, &[0, 0]);
         assert_eq!(d.state.borrow().state, 0xf0);
-        let mut read_buffer: [u8; 2] = [0;2];
+        let mut read_buffer: [u8; 2] = [0; 2];
         d.mmio_space.read_bar(4, &mut read_buffer);
         assert_eq!(d.state.borrow().state, 0xf0 - 1);
     }
-
-
 }
