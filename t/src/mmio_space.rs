@@ -2,10 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::cell::RefCell;
 use std::cmp::{Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::btree_map::BTreeMap;
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 type BarOffset = u64;
@@ -83,12 +81,25 @@ impl MMIOSpace {
         reg
     }
 
+    pub fn add_reg_array(&mut self, regs: &Vec<&'static Register>) {
+        for r in regs {
+            self.add_reg(r);
+        }
+    }
+
     pub fn add_callback(&mut self, reg: &'static Register, cb: Rc<RegisterCallback>) {
         for (range, r) in self.registers.iter_mut() {
             if *range == reg.get_bar_range() {
                 r.cb = Some(cb);
                 return;
             }
+        }
+        panic!("Fail to add callback to register");
+    }
+
+    pub fn add_callback_array(&mut self, cbs: Vec<(&'static Register, Rc<RegisterCallback>)>) {
+        for (r, cb) in cbs {
+            self.add_callback(r, cb.clone());
         }
     }
 
@@ -188,27 +199,6 @@ impl MMIOSpace {
         self.data[addr as usize]
     }
 }
-
-macro_rules! register {
-    (
-        offset:
-        $offset:expr,size:
-        $size:expr,reset_value:
-        $rv:expr,guest_writeable_mask:
-        $gwm:expr,guest_write_1_to_clear_mask:
-        $gw1tcm:expr,
-    ) => {{
-        static REG: Register = Register {
-            offset: $offset,
-            size: $size,
-            reset_value: $rv,
-            guest_writeable_mask: $gwm,
-            guest_write_1_to_clear_mask: $gw1tcm,
-        };
-        &REG
-    }};
-}
-
 // Implementing this trait will be desugared closure.
 pub trait RegisterCallback {
     fn write_reg_callback(&self, _mmio_space: &mut MMIOSpace, _val: u64) {}
@@ -216,7 +206,8 @@ pub trait RegisterCallback {
     fn read_reg_callback(&self, _mmio_space: &mut MMIOSpace) {}
 }
 
-macro_rules! reg_cb {
+#[macro_export]
+macro_rules! def_reg_cb {
     ($cb_name:ident, $state_name:ident) => {
         struct $cb_name {
             device_state: Rc<RefCell<$state_name>>,
@@ -224,38 +215,32 @@ macro_rules! reg_cb {
     };
 }
 
-pub struct RegArrayGenerator<T, C: RegArrayCallback<T>> {
-    reg_count: usize,
-    base_offset: BarOffset,
-    stride: BarOffset, // Stride of the register in bytes.
-    size: BarOffset,
-    reset_value: u64,
-    guest_writeable_mask: u64,
-    guest_write_1_to_clear_mask: u64,
-    device_state: Rc<RefCell<T>>,
-    phantom: PhantomData<C>,
-}
-
-pub trait RegArrayCallback<T> {
-    fn new(idx: usize, state: Rc<RefCell<T>>) -> Box<RegisterCallback>;
-}
-
-impl<T, C: RegArrayCallback<T>> RegArrayGenerator<T, C> {
-    fn generate_reg(&self, idx: usize) -> Register {
-        Register {
-            offset: self.base_offset + self.stride * (idx as BarOffset),
-            size: self.size,
-            reset_value: self.reset_value,
-            guest_writeable_mask: self.guest_writeable_mask,
-            guest_write_1_to_clear_mask: self.guest_write_1_to_clear_mask,
-            //        callback: Some(C::new(idx, Rc::clone(&self.device_state))),
+#[macro_export]
+macro_rules! def_reg_array_cb {
+    ($cb_name:ident, $state_name:ident) => {
+        struct $cb_name {
+            idx: usize,
+            device_state: Rc<RefCell<$state_name>>,
         }
-    }
+    };
 }
+
+#[macro_export]
+macro_rules! callback_array {
+    ($cb_name:ident, $regs:ident, $state:ident) => {{
+        let mut v: Vec<(&'static Register, Rc<RegisterCallback>)> = Vec::new();
+        for i in 0..$regs.len() {
+            v.push(($regs[i], Rc::new($cb_name {idx: i, device_state: Rc::clone(&$state)})));
+        }
+        v
+    }};
+}
+
+
 
 // TODO refactor Register with enum to better support Register array!
 // Register is the spec of a register in mmio space. The callback
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Register {
     offset: BarOffset,
     size: BarOffset,
@@ -267,18 +252,72 @@ pub struct Register {
     guest_write_1_to_clear_mask: u64,
 }
 
-// All methods of Register should take '&self' rather than '&mut self'.
-impl Register {
-    pub fn new_ro(offset: BarOffset, size: BarOffset, reset_value: u64) -> Register {
-        Register {
-            offset: offset,
-            size: size,
-            reset_value: reset_value,
+#[macro_export]
+macro_rules! register {
+    (
+        offset:$offset:expr,
+        size:$size:expr,
+        reset_value:$rv:expr,
+        guest_writeable_mask: $gwm:expr,
+        guest_write_1_to_clear_mask:$gw1tcm:expr,
+    ) => {{
+        static REG: Register = Register {
+            offset: $offset,
+            size: $size,
+            reset_value: $rv,
+            guest_writeable_mask: $gwm,
+            guest_write_1_to_clear_mask: $gw1tcm,
+        };
+        &REG
+    }};
+    (
+        offset:$offset:expr,
+        size:$size:expr,
+        reset_value:$rv:expr,
+    ) => {{
+        static REG: Register = Register {
+            offset: $offset,
+            size: $size,
+            reset_value: $rv,
             guest_writeable_mask: 0,
             guest_write_1_to_clear_mask: 0,
-        }
-    }
+        };
+        &REG
+    }};
+}
 
+#[macro_export]
+macro_rules! register_array {
+    (
+        cnt: $cnt:expr,
+        base_offset: $base_offset:expr,
+        stride: $stride:expr, // Stride of the register in bytes.
+        size: $size:expr,
+        reset_value: $rv:expr,
+        guest_writeable_mask: $gwm:expr,
+        guest_write_1_to_clear_mask: $gw1tcm:expr,
+    ) => {{
+        static mut REGS: [Register; $cnt] = [Register {
+            offset: $base_offset,
+            size: $size,
+            reset_value: $rv,
+            guest_writeable_mask: $gwm,
+            guest_write_1_to_clear_mask: $gw1tcm,
+        }; $cnt];
+        let mut v: Vec<&'static Register> = Vec::new();
+        for i in 0..$cnt {
+            unsafe {
+                REGS[i].offset += ($stride * i) as BarOffset;
+                v.push(&REGS[i]);
+            }
+        }
+        v
+    }};
+
+}
+
+// All methods of Register should take '&self' rather than '&mut self'.
+impl Register {
     pub fn get_bar_range(&self) -> BarRange {
         BarRange(self.offset, self.offset + self.size)
     }
@@ -343,6 +382,7 @@ impl Register {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn mmio_add_reg() {
@@ -531,7 +571,7 @@ mod tests {
         state: Rc<RefCell<DeviceState>>,
     }
 
-    reg_cb!(RegCallback, DeviceState);
+    def_reg_cb!(RegCallback, DeviceState);
     impl RegisterCallback for RegCallback {
         fn write_reg_callback(&self, _mmio: &mut MMIOSpace, val: u64) {
             self.device_state.borrow_mut().state += val as u8;
@@ -595,5 +635,39 @@ mod tests {
         let mut read_buffer: [u8; 2] = [0; 2];
         d.mmio_space.read_bar(4, &mut read_buffer);
         assert_eq!(d.state.borrow().state, 0xf0 - 1);
+    }
+
+    struct DeviceState2 {
+        state: u32,
+    }
+    def_reg_array_cb! (RegArrayCB, DeviceState2);
+    impl RegisterCallback for RegArrayCB {
+        fn write_reg_callback(&self, _mmio: &mut MMIOSpace, val: u64) {
+            self.device_state.borrow_mut().state +=
+                (self.idx as u32) * (val as u32);
+        }
+        fn read_reg_callback(&self, _mmio: &mut MMIOSpace) {}
+    }
+
+    #[test]
+    fn mmio_reg_array_callback() {
+        let device_state = Rc::<RefCell<DeviceState2>>::new(RefCell::new(DeviceState2 {
+            state: 0,
+        }));
+        let mut mmio = MMIOSpace::new();
+        let regs = register_array!(cnt: 8,
+                                   base_offset: 0,
+                                   stride: 8,
+                                   size: 4,
+                                   reset_value: 0,
+                                   guest_writeable_mask:0b10,
+                                   guest_write_1_to_clear_mask: 0,);
+        mmio.add_reg_array(&regs);
+        mmio.add_callback_array(callback_array!(RegArrayCB, regs, device_state));
+        assert_eq!(mmio.get_size(), 0 + 8*7 + 4);
+        mmio.write_bar(8, &[0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(device_state.borrow().state, 2);
+        mmio.write_bar(32, &[0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(device_state.borrow().state, 10);
     }
 }
