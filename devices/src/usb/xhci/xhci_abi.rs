@@ -59,6 +59,33 @@ pub trait TrbCast: DataInit {
     }
 }
 
+impl Trb {
+    pub fn trb_type(&self) -> Result<TrbType> {
+        TrbType::from(self.get_trb_type());
+    }
+
+    pub fn set_cycle_bit(&mut self, b: bool) {
+        match b {
+            true => self.set_cycle(1u8),
+            false => self.set_cyle(0u8),
+        }
+    }
+
+    pub fn get_chain_bit(&self) -> bool {
+        match self.trb_type().unwrap() {
+            TrbType::Normal => self.cast<NormalTrb>().get_chain() != 0,
+            TrbType::DataStage => self.cast<DataStageTrb>().get_chain() != 0,
+            TrbType::StatusStage => self.cast<StatusStageTrb>().get_chain() != 0,
+            TrbType::Isoch => self.cast<IsochTrb>().get_chain() != 0,
+            TrbType::Noop => self.cast<NoopTrb>().get_chain() != 0,
+            TrbType::Link => self.cast<LinkTrb>().get_chain() != 0,
+            TrbType::EventData => self.cast<EventDataTrb>().get_chain() != 0,
+            // TODO(jkwang) add log here.
+            _ => false,
+        }
+    }
+}
+
 pub enum Error {
     InvalidValue(u8),
 }
@@ -148,19 +175,6 @@ impl PrimitiveEnum for TrbType {
             &TrbType::TransferEvent => 32,
             &TrbType::CommandCompletionEvent => 33,
             &TrbType::PortStatusChangeEvent => 34,
-        }
-    }
-}
-
-impl Trb {
-    pub fn trb_type(&self) -> Result<TrbType> {
-        TrbType::from(self.get_trb_type());
-    }
-
-    pub fn set_cycle_bit(&mut self, b: bool) {
-        match b {
-            true => self.set_cycle(1u8),
-            false => self.set_cyle(0u8),
         }
     }
 }
