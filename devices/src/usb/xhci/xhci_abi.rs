@@ -59,6 +59,20 @@ pub trait TrbCast: DataInit {
     }
 }
 
+pub enum Error {
+    InvalidValue(u8),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &Error::InvalidValue(val) => write!(f, "Primitive Enum got an invaild value: {}", val),
+        }
+    }
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
 impl Trb {
     pub fn trb_type(&self) -> Result<TrbType> {
         TrbType::from(self.get_trb_type());
@@ -85,20 +99,6 @@ impl Trb {
         }
     }
 }
-
-pub enum Error {
-    InvalidValue(u8),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &Error::InvalidValue(val) => write!(f, "Primitive Enum got an invaild value: {}", val),
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, Error>;
 
 pub trait PrimitiveEnum {
     fn from(val: u8) -> Result<Self>
