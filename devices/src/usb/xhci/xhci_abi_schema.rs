@@ -77,6 +77,9 @@ type B64 = BitField64;
 // Fixed size for all TRB types.
 const TRB_SIZE: usize = 16;
 
+// Size for segment table.
+const SEGMENT_TABLE_SIZE: usize = 16;
+
 // Generic TRB struct containing only fields common to all types.
 // TODO(jkwang) add stringify.
 
@@ -467,7 +470,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<CommandCompletionEventTrb>(), TRB_SIZE);
         assert_eq!(std::mem::size_of::<PortStatusChangeEventTrb>(), TRB_SIZE);
 
-        assert_eq!(std::mem::size_of::<EventRingSegmentTableEntry>(), 16);
+        assert_eq!(std::mem::size_of::<EventRingSegmentTableEntry>(), SEGMENT_TABLE_SIZE);
         assert_eq!(std::mem::size_of::<InputControlContext>(), 32);
         assert_eq!(std::mem::size_of::<SlotContext>(), DEVICE_CONTEXT_ENTRY_SIZE);
         assert_eq!(std::mem::size_of::<EndpointContext>(), DEVICE_CONTEXT_ENTRY_SIZE);

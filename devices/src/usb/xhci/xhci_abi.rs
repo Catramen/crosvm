@@ -190,6 +190,13 @@ impl Trb {
     pub fn trb_type(&self) -> Result<TrbType> {
         TrbType::from(self.get_trb_type());
     }
+
+    pub fn set_cycle_bit(&mut self, b: bool) {
+        match b {
+            true => self.set_cycle(1u8),
+            false => self.set_cyle(0u8),
+        }
+    }
 }
 
 #[derive(BitField)]
