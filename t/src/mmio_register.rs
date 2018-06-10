@@ -111,7 +111,7 @@ pub trait RegisterInterface {
 
 // Spec for Hardware init Read Only Registers.
 // The value of this register won't change.
-pub struct StaticRegisterSpec<T> where T: std::convert::Into<u64> {
+pub struct StaticRegisterSpec<T> {
     offset: BarOffset,
     value: T,
 }
@@ -153,6 +153,53 @@ macro_rules! static_register {
             );
         r
     }}
+}
+
+pub struct RegisterSpec<T> {
+    offset: BarOffset,
+    size: BarOffset,
+    reset_value: T,
+    // Only masked bits could be written by guest.
+    guest_writeable_mask: T,
+    // When write 1 to bits masked, those bits will be cleared. See Xhci spec 5.1
+    // for more details.
+    guest_write_1_to_clear_mask: T,
+}
+
+pub struct RegisterInner<T> {
+    // Value can be set in any thread.
+    __data: T
+    // Write_cb can be set in the same thread.
+    __write_cb: Option<Box<Fn()>>
+}
+
+pub struct Register<T 'static> {
+    spec: &'static RegisterSpec<T>,
+    inner: Arc<Mutex<Register<T>>>,
+    // Write_cb can be set in the same thread.
+    __write_cb: Option<Box<Fn()>>
+}
+}
+
+// All functions implemented on this one is thread safe.
+impl <T> RegisterInterface for ThreadSafeRegister<T>  where T: std::convert::Into<u64> + Clone {
+    fn bar_range(&self) -> BarRange {
+       BarRange {
+            from: self.spec.offset,
+            to: self.spec.offset + (size_of::<T>() as u64) - 1
+        }
+    }
+    fn read_bar(&self, addr: BarOffset, data: &mut [u8]) {
+    }
+    fn write_bar(&self, addr: BarOffset, data: &[u8]) {
+    }
+
+    fn reset(&self) {
+
+    }
+
+    fn add_write_cb(&self, callback: Box<Fn()>) {
+    }
 }
 
 #[cfg(test)]
@@ -210,56 +257,3 @@ mod tests {
     }
 }
 
-/*
-pub struct RegisterSpec <T> {
-    offset: BarOffset,
-    size: BarOffset,
-    reset_value: T,
-    // Only masked bits could be written by guest.
-    guest_writeable_mask: <T>,
-    // When write 1 to bits masked, those bits will be cleared. See Xhci spec 5.1
-    // for more details.
-    guest_write_1_to_clear_mask: <T>,
-}
-impl RegisterInterface for StaticRegister {...}
-
-// All functions implemented on this one is thread safe.
-// It can be safely cloned.
-pub struct Register<T> {
-    spec: &'static RegisterSpec<T>,
-   // Value can be set in any thread.
-    __data: Arc<Mutex<T>>
-}
-
-// Callbacks are not thread safe. They are only invoked on the thread mmio lives.
-pub struct RegisterWrapper<T> {
-    inner: Register<T>,
-   // Write_cb can be set in the same thread.
-    __write_cb: RefCell<Box<Fn()>>,
-}
-
-macro_rules! Register {
-    () => {
-        let r = Register {
-            
-        }
-        let a : Rc<RegisterInterface> = new(...);
-        (r, Rc)
-    };
-}
-impl Register {
-    pub fn set_write_callback(&mut self) {}
-    pub fn write_callback(&mut self) {}
-    pub fn write_value() {}
-}
-
-pub struct RegisterWrapper<T> {
-
-}
-
-impl RegisterInterface for RegisterWrapper {...}
-
-pub struct MMIOSpace {
-    // Owns StaticRegister, RegisterWrapper.
-    regs: Rc<RegisterInterface>,
-} */
