@@ -151,7 +151,6 @@ macro_rules! static_register {
 
 pub struct RegisterSpec<T> {
     offset: BarOffset,
-    size: BarOffset,
     reset_value: T,
     // Only masked bits could be written by guest.
     guest_writeable_mask: T,
@@ -160,7 +159,7 @@ pub struct RegisterSpec<T> {
     guest_write_1_to_clear_mask: T,
 }
 
-pub struct RegisterInner<T: 'static> {
+struct RegisterInner<T: 'static> {
     value: T,
     write_cb: Option<Box<Fn(u64)>>
 }
@@ -238,13 +237,174 @@ impl <T> Register<T> where T: std::convert::Into<u64> + Clone {
         (old_byte & (!w_mask)) | (val & w_mask)
     }
 
-    fn add_write_cb(&self, callback: Box<Fn(u64)>) {
+    fn set_write_cb(&self, callback: Box<Fn(u64)>) {
         self.inner.lock().unwrap().write_cb = Some(callback);
     }
 
     pub fn set_value(&self, val: T) {
         self.inner.lock().unwrap().value = val;
     }
+}
+
+
+#[macro_export]
+macro_rules! register {
+    (
+        ty: $ty:ty,
+        offset: $offset:expr,
+        reset_value: $rv:expr,
+        guest_writeable_mask: $mask:expr,
+        guest_write_1_to_clear_mask: $w1tcm:expr,
+    ) => {{
+        static REG_SPEC: RegisterSpec<$ty> = RegisterSpec::<$ty> {
+            offset: $offset,
+            reset_value: $rv,
+            guest_writeable_mask: $mask,
+            guest_write_1_to_clear_mask: $w1tcm,
+        };
+        Register::<$ty> {
+            spec: &REG_SPEC,
+            inner: Arc::new(Mutex::new(RegisterInner::<$ty> {
+                value: $rv,
+                write_cb: None,
+            }))
+        }
+    }}
+}
+
+#[macro_export]
+macro_rules! register_array {
+    (
+        ty: $ty:ty,
+        cnt: $cnt:expr,
+        base_offset: $base_offset:expr,
+        stride: $stride:expr, // Stride of the register in bytes.
+        reset_value: $rv:expr,
+        guest_writeable_mask: $gwm:expr,
+        guest_write_1_to_clear_mask: $gw1tcm:expr,
+    ) => {{
+        static mut REGS: [Register; $cnt] = [Register {
+            offset: $base_offset,
+            size: $size,
+            reset_value: $rv,
+            guest_writeable_mask: $gwm,
+            guest_write_1_to_clear_mask: $gw1tcm,
+        }; $cnt];
+        let mut v: Vec<Register<$ty>> = Vec::new();
+        for i in 0..$cnt {
+            unsafe {
+                REGS[i].offset += ($stride * i) as BarOffset;
+                v.push(&REGS[i]);
+            }
+        }
+        v
+    }};
+
+}
+
+use std::collections::btree_map::BTreeMap;
+
+pub struct MMIOSpace {
+    regs: BTreeMap<BarRange, Box<RegisterInterface>>,
+}
+
+impl MMIOSpace {
+    pub fn new() -> MMIOSpace {
+        MMIOSpace {
+            registers: BTreeMap::<BarRange, Box<RegisterInterface>::new(),
+        }
+    }
+
+    /*
+    pub fn add_register(&mut self, reg: RegisterInterface) {
+        debug_assert_eq!(self.get_register(reg.offset).is_none(), true);
+        if let Some(r) = self.first_before(reg.offset + reg.size - 1) {
+            debug_assert!(r.reg.offset < reg.offset);
+        }
+        let reg_max_offset: usize = (reg.offset + reg.size) as usize;
+        if reg_max_offset > self.data.len() {
+            self.data.resize(reg_max_offset, 0);
+        }
+
+        let insert_result = self
+            .registers
+            .insert(reg.get_bar_range(), RegAndCallback::new(reg))
+            .is_none();
+        debug_assert_eq!(insert_result, true);
+        reg
+    }*/
+
+    pub fn reset_all_registers(&self) {
+        for (_, r) in self.registers.iter().rev() {
+            r.reset()
+        }
+    }
+
+    /*
+    pub fn read_bar(&mut self, addr: BarOffset, data: &mut [u8]) {
+        let mut offset: BarOffset = 0;
+        while offset < data.len() as BarOffset {
+            if let Some(ref rc) = self.get_register(addr + offset) {
+                offset += rc.reg.size;
+                if let Some(ref cb) = rc.cb {
+                    read_cbs.push(cb.clone());
+                }
+            } else {
+                // TODO, add logging?
+                offset = offset + 1;
+            }
+        }
+        for callback in read_cbs {
+            callback.read_reg_callback(self);
+        }
+        for idx in 0..(data.len() as BarOffset) {
+            data[idx as usize] = self.get_byte(addr + idx);
+        }
+    }
+
+    pub fn write_bar(&mut self, addr: BarOffset, data: &[u8]) {
+        let mut offset: BarOffset = 0;
+        while offset < data.len() as BarOffset {
+            if let Some(ref rc) = self.get_register(addr) {
+                let mut idx: BarOffset = 0;
+                while idx < (rc.reg).size && offset + idx < data.len() as BarOffset {
+                    rc.reg
+                        .set_byte_as_guest(self, addr + idx, data[(offset + idx) as usize]);
+                    idx = idx + 1;
+                }
+                offset += idx;
+                let val = rc.reg.get_value(self);
+                if let Some(ref cb) = rc.cb {
+                    cb.write_reg_callback(self, val);
+                }
+            } else {
+                offset = offset + 1;
+            }
+        }
+    }
+    */
+
+    fn first_before(&self, addr: BarOffset) -> Option<&Box<RegisterInterface>> {
+        // for when we switch to rustc 1.17: self.devices.range(..addr).iter().rev().next()
+        for (range, r) in self.registers.iter().rev() {
+            if range.0 <= addr {
+                return Some(r);
+            }
+        }
+        None
+    }
+
+    /*
+       fn get_register(&self, addr: BarOffset) -> Option<RegAndCallback> {
+       if let Some(r) = self.first_before(addr) {
+       let offset = addr - r.reg.offset;
+       if offset < r.reg.size {
+       return Some(r.clone());
+       }
+       }
+       None
+       }
+*/
 }
 
 #[cfg(test)]
@@ -299,6 +459,128 @@ mod tests {
         assert_eq!(data, [0,0,0,32]);
         r.read_bar(2, &mut data);
         assert_eq!(data, [0,32,0,32]);
+    }
+
+    #[test]
+    fn register_basic_rw_test() {
+        let r = register! {
+            ty: u8,
+            offset: 3,
+            reset_value: 0xf1,
+            guest_writeable_mask: 0xff,
+            guest_write_1_to_clear_mask: 0x0,
+        };
+        let mut data: [u8; 4] = [0, 0, 0, 0];
+        assert_eq!(r.bar_range().from, 3);
+        assert_eq!(r.bar_range().to, 3);
+        r.read_bar(0, &mut data);
+        assert_eq!(data, [0,0,0,0xf1]);
+        r.read_bar(2, &mut data);
+        assert_eq!(data, [0,0xf1,0,0xf1]);
+        data = [0,0,0,0xab];
+        r.write_bar(0, &data);
+        assert_eq!(r.get_value(), 0xab);
+        r.reset();
+        assert_eq!(r.get_value(), 0xf1);
+        r.set_value(0xcc);
+        assert_eq!(r.get_value(), 0xcc);
+    }
+
+    #[test]
+    fn register_basic_writeable_mask_test() {
+        let r = register! {
+            ty: u8,
+            offset: 3,
+            reset_value: 0x0,
+            guest_writeable_mask: 0xf,
+            guest_write_1_to_clear_mask: 0x0,
+        };
+        let mut data: [u8; 4] = [0, 0, 0, 0];
+        assert_eq!(r.bar_range().from, 3);
+        assert_eq!(r.bar_range().to, 3);
+        r.read_bar(0, &mut data);
+        assert_eq!(data, [0,0,0,0]);
+        data = [0,0,0,0xab];
+        r.write_bar(0, &data);
+        assert_eq!(r.get_value(), 0x0b);
+        r.reset();
+        assert_eq!(r.get_value(), 0x0);
+        r.set_value(0xcc);
+        assert_eq!(r.get_value(), 0xcc);
+    }
+
+    #[test]
+    fn register_basic_write_1_to_clear_mask_test() {
+        let r = register! {
+            ty: u8,
+            offset: 3,
+            reset_value: 0xf1,
+            guest_writeable_mask: 0xff,
+            guest_write_1_to_clear_mask: 0xf0,
+        };
+        let mut data: [u8; 4] = [0, 0, 0, 0];
+        assert_eq!(r.bar_range().from, 3);
+        assert_eq!(r.bar_range().to, 3);
+        r.read_bar(0, &mut data);
+        assert_eq!(data, [0,0,0,0xf1]);
+        data = [0,0,0,0xfa];
+        r.write_bar(0, &data);
+        assert_eq!(r.get_value(), 0x0a);
+        r.reset();
+        assert_eq!(r.get_value(), 0xf1);
+        r.set_value(0xcc);
+        assert_eq!(r.get_value(), 0xcc);
+    }
+
+    #[test]
+    fn register_basic_write_1_to_clear_mask_test_u32() {
+        let r = register! {
+            ty: u32,
+            offset: 0,
+            reset_value: 0xfff1,
+            guest_writeable_mask: 0xff,
+            guest_write_1_to_clear_mask: 0xf0,
+        };
+        let mut data: [u8; 4] = [0, 0, 0, 0];
+        assert_eq!(r.bar_range().from, 0);
+        assert_eq!(r.bar_range().to, 3);
+        r.read_bar(0, &mut data);
+        assert_eq!(data, [0xf1,0xff,0,0]);
+        data = [0xfa,0,0,0];
+        r.write_bar(0, &data);
+        assert_eq!(r.get_value(), 0xff0a);
+        r.reset();
+        assert_eq!(r.get_value(), 0xfff1);
+        r.set_value(0xcc);
+        assert_eq!(r.get_value(), 0xcc);
+    }
+
+
+    #[test]
+    fn register_callback_test() {
+        let state = Arc::new(Mutex::new(0u8));
+        let r = register! {
+            ty: u8,
+            offset: 3,
+            reset_value: 0xf1,
+            guest_writeable_mask: 0xff,
+            guest_write_1_to_clear_mask: 0xf0,
+        };
+
+        let s2 = state.clone();
+        r.set_write_cb(Box::new(
+                    move |val: u64| {
+                        *s2.lock().unwrap() = val as u8;
+                    }
+                ));
+        let data: [u8; 4] = [0, 0, 0, 0xff];
+        r.write_bar(0, &data);
+        assert_eq!(*state.lock().unwrap(), 0xf);
+        r.set_value(0xab);
+        assert_eq!(*state.lock().unwrap(), 0xf);
+        let data: [u8; 1] = [0xfc];
+        r.write_bar(3, &data);
+        assert_eq!(*state.lock().unwrap(), 0xc);
     }
 }
 
