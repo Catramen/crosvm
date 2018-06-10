@@ -3,44 +3,48 @@
 // found in the LICENSE file.
 
 use std;
+use std::boxed::Box;
 use std::cmp::{min, max, Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::btree_map::BTreeMap;
 use std::rc::Rc;
 use std::ops::{Add ,Shr};
 use std::mem::size_of;
-use std::marker::Copy;
+use std::marker::{Copy, Sized};
 
 type BarOffset = u64;
 
 // This represents a range of memory in the MMIO space starting from Bar.
-// BarRange.0 is start offset, BarRange.1 is len.
+// Both from and to and inclusive.
 #[derive(Debug, Copy, Clone)]
-pub struct BarRange(BarOffset, BarOffset);
+pub struct BarRange {
+    from: BarOffset,
+    to: BarOffset,
+}
 
 impl Eq for BarRange {}
 
 impl PartialEq for BarRange {
     fn eq(&self, other: &BarRange) -> bool {
-        self.0 == other.0
+        self.from == other.from
     }
 }
 
 impl Ord for BarRange {
     fn cmp(&self, other: &BarRange) -> Ordering {
-        self.0.cmp(&other.0)
+        self.from.cmp(&other.from)
     }
 }
 
 impl PartialOrd for BarRange {
     fn partial_cmp(&self, other: &BarRange) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
+        self.from.partial_cmp(&other.from)
     }
 }
 
 impl BarRange {
     // Return if those range matches.
     pub fn overlap_with(&self, other: &BarRange) -> bool {
-        if self.0 > other.1 || self.1 < other.0 {
+        if self.from > other.to || self.to < other.from {
             return false;
         }
         return true;
@@ -55,7 +59,12 @@ impl BarRange {
         if !self.overlap_with(other) {
             return None;
         }
-        Some(BarRange(max(self.0, other.0), min(self.1, other.1)))
+        Some(
+            BarRange{
+                from: max(self.from, other.from),
+                to: min(self.to, other.to)
+            }
+            )
     }
 }
 
@@ -66,7 +75,7 @@ impl BarRange {
 fn get_byte(val: u64, val_size: usize, offset: usize) -> u8 {
     debug_assert!(offset <= val_size);
     debug_assert!(val_size <= size_of::<u64>());
-    (val >> offset) as u8
+    (val >> (offset * 8)) as u8
 }
 
 fn read_reg_helper(val: u64,
@@ -74,15 +83,15 @@ fn read_reg_helper(val: u64,
                    val_range: BarRange,
                    addr: BarOffset,
                    data: &mut [u8]) {
-        let read_range = BarRange(addr, addr + data.len() as u64);
+        let read_range = BarRange{ from: addr, to: addr + data.len() as u64 - 1};
         if !val_range.overlap_with(&read_range) {
             // TODO(jkwang) Alarm the user.
             return;
         }
         let overlap = val_range.overlap_range(&read_range).unwrap();
-        let val_start_idx = (overlap.0 - val_range.0) as usize;
-        let read_start_idx = (overlap.0 - read_range.0) as usize;
-        let total_size = (overlap.1 - overlap.0) as usize;
+        let val_start_idx = (overlap.from - val_range.from) as usize;
+        let read_start_idx = (overlap.from - read_range.from) as usize;
+        let total_size = (overlap.to - overlap.from) as usize + 1;
         for i in 0..total_size {
             data[read_start_idx + i] = get_byte(val, val_size, val_start_idx + i);
         }
@@ -112,15 +121,38 @@ pub struct StaticRegister<T: 'static> where T: std::convert::Into<u64> {
     spec: &'static StaticRegisterSpec<T>,
 }
 
-impl<T> RegisterInterface for StaticRegister<T> where T: std::convert::Into<u64> + Copy {
+impl<T> RegisterInterface for StaticRegister<T> where T: std::convert::Into<u64> + Clone {
     fn bar_range(&self) -> BarRange {
-        BarRange(self.spec.offset, self.spec.offset + (size_of::<T>() as u64))
+        BarRange {
+            from: self.spec.offset,
+            to: self.spec.offset + (size_of::<T>() as u64) - 1
+        }
     }
 
     fn read_bar(&self, addr: BarOffset, data: &mut [u8]) {
         let val_range = self.bar_range();
-        read_reg_helper(self.spec.value.into(), size_of::<T>(), val_range, addr, data);
+        read_reg_helper(self.spec.value.clone().into(), size_of::<T>(), val_range, addr, data);
      }
+}
+
+#[macro_export]
+macro_rules! static_register {
+    (
+        ty: $ty:ty,
+        offset: $offset:expr,
+        value: $value:expr,
+    ) => {{
+        static REG_SPEC: StaticRegisterSpec<$ty> = StaticRegisterSpec::<$ty> {
+            offset: $offset,
+            value: $value,
+        };
+        let r : Box<RegisterInterface> = Box::new(
+            StaticRegister::<$ty> {
+                spec: &REG_SPEC
+            }
+            );
+        r
+    }}
 }
 
 #[cfg(test)]
@@ -132,11 +164,45 @@ mod tests {
         value: 32,
     };
 
+    static REG_SPEC1: StaticRegisterSpec<u16> = StaticRegisterSpec::<u16> {
+        offset: 3,
+        value: 32,
+    };
+
     #[test]
-    fn static_register_basic_test() {
+    fn static_register_basic_test_u8() {
         let r = StaticRegister::<u8> { spec: &REG_SPEC0 };
         let mut data: [u8; 4] = [0, 0, 0, 0];
-        assert_eq!(r.bar_range(), BarRange(3, 4));
+        assert_eq!(r.bar_range().from, 3);
+        assert_eq!(r.bar_range().to, 3);
+        r.read_bar(0, &mut data);
+        assert_eq!(data, [0,0,0,32]);
+        r.read_bar(2, &mut data);
+        assert_eq!(data, [0,32,0,32]);
+    }
+
+    #[test]
+    fn static_register_basic_test_u16() {
+        let r = StaticRegister::<u16> { spec: &REG_SPEC1 };
+        let mut data: [u8; 4] = [0, 0, 0, 0];
+        assert_eq!(r.bar_range().from, 3);
+        assert_eq!(r.bar_range().to, 4);
+        r.read_bar(0, &mut data);
+        assert_eq!(data, [0,0,0,32]);
+        r.read_bar(2, &mut data);
+        assert_eq!(data, [0,32,0,32]);
+    }
+
+    #[test]
+    fn static_register_interface_test() {
+        let r: Box<RegisterInterface>= static_register!{
+            ty: u8,
+            offset: 3,
+            value: 32,
+        };
+        let mut data: [u8; 4] = [0, 0, 0, 0];
+        assert_eq!(r.bar_range().from, 3);
+        assert_eq!(r.bar_range().to, 3);
         r.read_bar(0, &mut data);
         assert_eq!(data, [0,0,0,32]);
         r.read_bar(2, &mut data);
