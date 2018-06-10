@@ -5,12 +5,9 @@
 use std;
 use std::boxed::Box;
 use std::cmp::{min, max, Ord, Ordering, PartialEq, PartialOrd};
-use std::collections::btree_map::BTreeMap;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::ops::{Add ,Shr};
 use std::mem::size_of;
-use std::marker::{Copy, Sized};
+use std::slice::{from_raw_parts_mut};
 
 type BarOffset = u64;
 
@@ -105,9 +102,8 @@ fn read_reg_helper(val: u64,
 pub trait RegisterInterface {
     fn bar_range(&self) -> BarRange;
     fn read_bar(&self, addr: BarOffset, data: &mut [u8]);
-    fn write_bar(&self, addr: BarOffset, data: &[u8]) {}
+    fn write_bar(&self, _addr: BarOffset, _data: &[u8]) {}
     fn reset(&self) {}
-    fn add_write_cb(&self, callback: Box<Fn()>) {}
 }
 
 // Spec for Hardware init Read Only Registers.
@@ -165,10 +161,8 @@ pub struct RegisterSpec<T> {
 }
 
 pub struct RegisterInner<T: 'static> {
-    // Value can be set in any thread.
-    __data: T,
-    // Write_cb can be set in the same thread.
-    __write_cb: Option<Box<Fn()>>
+    value: T,
+    write_cb: Option<Box<Fn(u64)>>
 }
 
 pub struct Register<T: 'static> {
@@ -186,16 +180,70 @@ impl <T> RegisterInterface for Register<T>  where T: std::convert::Into<u64> + C
     }
 
     fn read_bar(&self, addr: BarOffset, data: &mut [u8]) {
+        let val_range = self.bar_range();
+        let value = self.inner.lock().unwrap().value.clone();
+        read_reg_helper(value.into(), size_of::<T>(), val_range, addr, data);
     }
 
     fn write_bar(&self, addr: BarOffset, data: &[u8]) {
+        let my_range = self.bar_range();
+        let write_range = BarRange{ from: addr, to: addr + data.len() as u64 - 1};
+        if !my_range.overlap_with(&write_range) {
+            // TODO(jkwang) Alarm the user.
+            return;
+        }
+        let overlap = my_range.overlap_range(&write_range).unwrap();
+        let my_start_idx = (overlap.from - my_range.from) as usize;
+        let write_start_idx = (overlap.from - write_range.from) as usize;
+        let total_size = (overlap.to - overlap.from) as usize + 1;
+        let mut inner = self.inner.lock().unwrap();
+        // Yes, it's not necessary here. But it's much easier than specify trait bounds to enable
+        // shift operations.
+        let value: &mut [u8] = unsafe { from_raw_parts_mut( (&mut inner.value) as *mut T as *mut u8, size_of::<T>()) };
+        for i in 0..total_size {
+            value[my_start_idx + i] = self.apply_write_masks_to_byte(
+                value[my_start_idx + i],
+                data[write_start_idx + i],
+                my_start_idx + i);
+        }
+        if let Some(ref cb) = inner.write_cb {
+            cb(inner.value.clone().into());
+        }
     }
 
     fn reset(&self) {
+        self.inner.lock().unwrap().value = self.spec.reset_value.clone();
+    }
+}
 
+impl <T> Register<T> where T: std::convert::Into<u64> + Clone {
+    pub fn get_value(&self) -> T{
+        self.inner.lock().unwrap().value.clone()
     }
 
-    fn add_write_cb(&self, callback: Box<Fn()>) {
+    // This function apply "write 1 to clear mask" and "guest writeable mask".
+    // All write operations should go through this, the result of this function
+    // is the new state of correspoding byte.
+    pub fn apply_write_masks_to_byte(&self,
+                                     old_byte: u8,
+                                     write_byte: u8,
+                                     offset: usize) -> u8 {
+        let guest_write_1_to_clear_mask: u64 = self.spec.guest_write_1_to_clear_mask.clone().into();
+        let guest_writeable_mask: u64 = self.spec.guest_writeable_mask.clone().into();
+        // Mask with w1c mask.
+        let w1c_mask = (guest_write_1_to_clear_mask >> (offset * 8)) as u8;
+        let val = (!w1c_mask & write_byte) | (w1c_mask & old_byte & !write_byte);
+        // Mask with writable mask.
+        let w_mask = (guest_writeable_mask >> (offset * 8)) as u8;
+        (old_byte & (!w_mask)) | (val & w_mask)
+    }
+
+    fn add_write_cb(&self, callback: Box<Fn(u64)>) {
+        self.inner.lock().unwrap().write_cb = Some(callback);
+    }
+
+    pub fn set_value(&self, val: T) {
+        self.inner.lock().unwrap().value = val;
     }
 }
 
