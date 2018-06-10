@@ -7,6 +7,7 @@ use std::boxed::Box;
 use std::cmp::{min, max, Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::btree_map::BTreeMap;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::ops::{Add ,Shr};
 use std::mem::size_of;
 use std::marker::{Copy, Sized};
@@ -146,12 +147,9 @@ macro_rules! static_register {
             offset: $offset,
             value: $value,
         };
-        let r : Box<RegisterInterface> = Box::new(
-            StaticRegister::<$ty> {
-                spec: &REG_SPEC
-            }
-            );
-        r
+        StaticRegister::<$ty> {
+            spec: &REG_SPEC
+        }
     }}
 }
 
@@ -166,31 +164,30 @@ pub struct RegisterSpec<T> {
     guest_write_1_to_clear_mask: T,
 }
 
-pub struct RegisterInner<T> {
+pub struct RegisterInner<T: 'static> {
     // Value can be set in any thread.
-    __data: T
+    __data: T,
     // Write_cb can be set in the same thread.
     __write_cb: Option<Box<Fn()>>
 }
 
-pub struct Register<T 'static> {
+pub struct Register<T: 'static> {
     spec: &'static RegisterSpec<T>,
-    inner: Arc<Mutex<Register<T>>>,
-    // Write_cb can be set in the same thread.
-    __write_cb: Option<Box<Fn()>>
-}
+    inner: Arc<Mutex<RegisterInner<T>>>,
 }
 
 // All functions implemented on this one is thread safe.
-impl <T> RegisterInterface for ThreadSafeRegister<T>  where T: std::convert::Into<u64> + Clone {
+impl <T> RegisterInterface for Register<T>  where T: std::convert::Into<u64> + Clone {
     fn bar_range(&self) -> BarRange {
        BarRange {
             from: self.spec.offset,
             to: self.spec.offset + (size_of::<T>() as u64) - 1
         }
     }
+
     fn read_bar(&self, addr: BarOffset, data: &mut [u8]) {
     }
+
     fn write_bar(&self, addr: BarOffset, data: &[u8]) {
     }
 
@@ -242,11 +239,11 @@ mod tests {
 
     #[test]
     fn static_register_interface_test() {
-        let r: Box<RegisterInterface>= static_register!{
+        let r: Box<RegisterInterface> = Box::new(static_register!{
             ty: u8,
             offset: 3,
             value: 32,
-        };
+        });
         let mut data: [u8; 4] = [0, 0, 0, 0];
         assert_eq!(r.bar_range().from, 3);
         assert_eq!(r.bar_range().to, 3);
