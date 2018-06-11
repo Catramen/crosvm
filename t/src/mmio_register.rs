@@ -311,100 +311,77 @@ pub struct MMIOSpace {
 impl MMIOSpace {
     pub fn new() -> MMIOSpace {
         MMIOSpace {
-            registers: BTreeMap::<BarRange, Box<RegisterInterface>::new(),
+            regs: BTreeMap::<BarRange, Box<RegisterInterface>>::new(),
         }
     }
 
-    /*
-    pub fn add_register(&mut self, reg: RegisterInterface) {
-        debug_assert_eq!(self.get_register(reg.offset).is_none(), true);
-        if let Some(r) = self.first_before(reg.offset + reg.size - 1) {
-            debug_assert!(r.reg.offset < reg.offset);
-        }
-        let reg_max_offset: usize = (reg.offset + reg.size) as usize;
-        if reg_max_offset > self.data.len() {
-            self.data.resize(reg_max_offset, 0);
+    pub fn add_register<T: RegisterInterface + 'static>(&mut self, reg: T) {
+        let range = reg.bar_range();
+        debug_assert_eq!(self.get_register(range.from).is_none(), true);
+        if let Some(r) = self.first_before(range.to) {
+            debug_assert!(r.bar_range().to < range.to);
         }
 
         let insert_result = self
-            .registers
-            .insert(reg.get_bar_range(), RegAndCallback::new(reg))
+            .regs
+            .insert(range, Box::new(reg))
             .is_none();
         debug_assert_eq!(insert_result, true);
-        reg
-    }*/
+    }
 
     pub fn reset_all_registers(&self) {
-        for (_, r) in self.registers.iter().rev() {
+        for (_, r) in self.regs.iter().rev() {
             r.reset()
         }
     }
 
-    /*
-    pub fn read_bar(&mut self, addr: BarOffset, data: &mut [u8]) {
-        let mut offset: BarOffset = 0;
-        while offset < data.len() as BarOffset {
-            if let Some(ref rc) = self.get_register(addr + offset) {
-                offset += rc.reg.size;
-                if let Some(ref cb) = rc.cb {
-                    read_cbs.push(cb.clone());
-                }
+    pub fn read_bar(&self, addr: BarOffset, data: &mut [u8]) {
+        let mut current_addr: BarOffset = addr;
+        while current_addr < addr + data.len() as BarOffset {
+            if let Some(r) = self.get_register(current_addr) {
+                // Next addr to read is.
+                current_addr = r.bar_range().to;
+                r.read_bar(addr, data);
             } else {
                 // TODO, add logging?
-                offset = offset + 1;
+                current_addr = current_addr + 1;
             }
-        }
-        for callback in read_cbs {
-            callback.read_reg_callback(self);
-        }
-        for idx in 0..(data.len() as BarOffset) {
-            data[idx as usize] = self.get_byte(addr + idx);
         }
     }
 
     pub fn write_bar(&mut self, addr: BarOffset, data: &[u8]) {
-        let mut offset: BarOffset = 0;
-        while offset < data.len() as BarOffset {
-            if let Some(ref rc) = self.get_register(addr) {
-                let mut idx: BarOffset = 0;
-                while idx < (rc.reg).size && offset + idx < data.len() as BarOffset {
-                    rc.reg
-                        .set_byte_as_guest(self, addr + idx, data[(offset + idx) as usize]);
-                    idx = idx + 1;
-                }
-                offset += idx;
-                let val = rc.reg.get_value(self);
-                if let Some(ref cb) = rc.cb {
-                    cb.write_reg_callback(self, val);
-                }
+        let mut current_addr: BarOffset = addr;
+        while current_addr < addr + data.len() as BarOffset {
+            if let Some(r) = self.get_register(current_addr) {
+                // Next addr to read is.
+                current_addr = r.bar_range().to;
+                r.write_bar(addr, data);
             } else {
-                offset = offset + 1;
+                // TODO, add logging?
+                current_addr = current_addr + 1;
             }
         }
     }
-    */
 
     fn first_before(&self, addr: BarOffset) -> Option<&Box<RegisterInterface>> {
         // for when we switch to rustc 1.17: self.devices.range(..addr).iter().rev().next()
-        for (range, r) in self.registers.iter().rev() {
-            if range.0 <= addr {
+        for (range, r) in self.regs.iter().rev() {
+            if range.from <= addr {
                 return Some(r);
             }
         }
         None
     }
 
-    /*
-       fn get_register(&self, addr: BarOffset) -> Option<RegAndCallback> {
-       if let Some(r) = self.first_before(addr) {
-       let offset = addr - r.reg.offset;
-       if offset < r.reg.size {
-       return Some(r.clone());
-       }
-       }
-       None
-       }
-*/
+    fn get_register(&self, addr: BarOffset) -> Option<&Box<RegisterInterface>> {
+        if let Some(r) = self.first_before(addr) {
+            let range = r.bar_range();
+            if addr < range.to {
+                return Some(r)
+            }
+        }
+        return None
+    }
 }
 
 #[cfg(test)]
