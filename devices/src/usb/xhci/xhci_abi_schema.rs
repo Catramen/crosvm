@@ -446,6 +446,8 @@ pub struct AddressedTrb {
     gpa: u64,
 }
 
+type TransferDescriptor = Vec<AddressedTrb>;
+
 #[cfg(test)]
 mod tests {
     use super::*;

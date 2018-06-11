@@ -98,6 +98,43 @@ impl Trb {
             _ => false,
         }
     }
+
+    pub fn interrupter_target(&self) -> u8 {
+        const STATUS_INTERRUPTER_TARGET_OFFSET: u8 = 22;
+        self.get_status() >> STATUS_INTERRUPTER_TARGET_OFFSET
+    }
+
+    pub fn can_in_transfer_ring(&self) -> bool {
+        match self.trb_type().unwrap() {
+            TrbType::Normal | TrbType::SetupStage | TrbType::DataStage |
+                TrbType::StatusStage | TrbType::Isoch | TrbType::Link |
+                TrbType:: EventData | TrbType::Noop => true,
+            _ => false,
+        }
+    }
+
+    pub fn transfer_length(&self) -> u32 {
+        const STATUS_TRANSFER_LENGTH_MASK: u32 = 0x1ffff;
+        match self.trb_type().unwrap() {
+            TrbType::Normal | TrbType::SetupStage | TrbType::DataStage | TrbType::Isoch
+                => trb.get_status() & STATUS_TRANSFER_LENGTH_MASK,
+                _ => 0,
+        }
+    }
+
+    pub fn interrupt_on_completion(&self) -> bool {
+        const FLAGS_INTERRUPT_ON_COMPLETION_MASK: u32= 0x10;
+        (self.get_flags() & FLAGS_INTERRUPT_ON_COMPLETION_MASK) > 0
+    }
+
+    pub fn immediate_data(&self) -> bool {
+        const FLAGS_IMMEDIATE_DATA_MASK: u32 = 0x20;
+        match self.trb_type().unwrap() {
+            TrbType::Normal | TrbType::SetupStage | TrbType::DataStage | TrbType::Isoch
+                -> self.get_flags() & FLAGS_IMMEDIATE_DATA_MASK,
+            _ => false,
+        }
+    }
 }
 
 pub trait PrimitiveEnum {
