@@ -74,7 +74,7 @@ impl EventRing {
         self.dequeue_pointer = addr;
     }
 
-    pub fn isEmpty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         return self.enqueue_pointer = self.dequeue_pointer;
     }
 

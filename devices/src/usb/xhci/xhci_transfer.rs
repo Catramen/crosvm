@@ -21,7 +21,5 @@ impl XhciTransfer {
     pub fn is_valid() -> bool {
 
     }
-
-
 }
 

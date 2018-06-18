@@ -35,9 +35,9 @@ impl TransferRingController {
 
     pub fn handle_transfer_descriptor(&self, descriptor: &[AddressedTrb],
                                       callback: Callback) {
-        
     }
 }
+
 
 
 #[cfg(test)]

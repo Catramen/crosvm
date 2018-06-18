@@ -145,25 +145,25 @@ pub trait PrimitiveEnum {
 }
 
 pub enum TrbType {
-    Reserved,
-    Normal,
-    SetupStage,
-    DataStage,
-    StatusStage,
-    Isoch,
-    Link,
-    EventData,
-    Noop,
-    EnableSlotCommand,
-    DisableSlotCommand,
-    AddressDeviceCommand,
-    ConfigureEndpointCommand,
-    EvaluateContextCommand,
-    ResetDeviceCommand,
-    NoopCommand,
-    TransferEvent,
-    CommandCompletionEvent,
-    PortStatusChangeEvent,
+    Reserved = 0,
+    Normal = 1,
+    SetupStage = 2,
+    DataStage = 3,
+    StatusStage = 4,
+    Isoch = 5,
+    Link = 6,
+    EventData = 7,
+    Noop = 8,
+    EnableSlotCommand = 9,
+    DisableSlotCommand = 10,
+    AddressDeviceCommand = 11,
+    ConfigureEndpointCommand = 12,
+    EvaluateContextCommand = 13,
+    ResetDeviceCommand = 17,
+    NoopCommand = 23,
+    TransferEvent = 32,
+    CommandCompletionEvent = 33,
+    PortStatusChangeEvent = 34,
 }
 
 impl PrimitiveEnum for TrbType {
@@ -256,10 +256,10 @@ impl PrimitiveEnum for TrbCompletionCode {
 pub enum DeviceSlotState {
     // The same value (0) is used for both the enabled and disabled states. See
     // xhci spec table 60.
-    DisabledOrEnabled,
-    Default,
-    Addressed,
-    Configured,
+    DisabledOrEnabled = 0,
+    Default = 1,
+    Addressed = 2,
+    Configured = 3,
 }
 
 impl PrimitiveEnum for DeviceSlotState {
@@ -280,6 +280,16 @@ impl PrimitiveEnum for DeviceSlotState {
             &DeviceSlotState::Addressed => 2,
             &DeviceSlotState::Configured => 3,
         }
+    }
+}
+
+impl SlotContext {
+    pub fn state(&self) -> DeviceSlotState {
+        DeviceSlotState::from(self.get_slot_state())
+    }
+
+    pub fn set_state(&mut self, new_state: DeviceSlotState) {
+        self.set_slot_state(state.to());
     }
 }
 
@@ -305,3 +315,8 @@ impl PrimitiveEnum for EndpointState {
     }
 }
 
+impl EndpointContext {
+    pub fn state(&self) -> EndpointState {
+        EndpointState::from(self.get_endpoint_state())
+    }
+}
