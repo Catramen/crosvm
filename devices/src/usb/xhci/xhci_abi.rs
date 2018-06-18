@@ -319,4 +319,21 @@ impl EndpointContext {
     pub fn state(&self) -> EndpointState {
         EndpointState::from(self.get_endpoint_state())
     }
+
+    pub fn set_state(&mut self, state: EndpointState) {
+        self.set_endpoint_sate(state.to());
+    }
 }
+
+
+impl InputControlContext {
+    pub fn drop_context_flag(&self, idx: u8) -> bool {
+        (self.get_drop_context_flags() &  (1 << idx)) > 0
+    }
+
+    pub fn add_context_flag(&self, idx: u8) -> bool {
+        (self.get_add_context_flags() &  (1 << idx)) > 0
+    }
+}
+
+

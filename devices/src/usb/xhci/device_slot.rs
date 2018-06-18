@@ -14,7 +14,7 @@ pub struct DeviceSlot {
 
     enabled: bool,
     backend: UsbBackend,
-    transfer_ring_controllers: [Option<TransferRing>; 32],
+    transfer_ring_controllers: [Option<TransferRingController>; 32],
     xhci: XHCI,
 }
 
@@ -55,7 +55,7 @@ impl DeviceSlot {
         }
 
         // TODO(jkwang) fix this.
-        self.transfer_ring_controllers[0] = TransferRingController::new();
+        self.transfer_ring_controllers[0] = Some(TransferRingController::new());
         self.enable = true
     }
 
@@ -105,22 +105,116 @@ impl DeviceSlot {
             device_context.slot_context.set_state(DeviceSlotState::Default);
         }
 
-        self.set_device_context(device_context);
+        self.transfer_ring_controllers[0].unwrap().set_dequeue_pointer(
+            GuestAddress(
+                device_context.endpoint_context[0].get_tr_dequeue_pointer() << 4)));
 
+        self.transfer_ring_controllers[0].unwrap().set_consumer_cycle_state(
+            device_context.endpoint_context[0].get_dequeue_cycle_state();
+            );
+
+        device_context.endpoint_context[0].unwrap().set_state(EndpointState::Running);
+        self.set_device_context(device_context);
     }
 
     // Adds or dropbs multiple endpoints in the device slot.
-    pub fn configure_endpoint(&self, trb: ConfigureEndpointCommandTrb) {
+    pub fn configure_endpoint(&self, trb: ConfigureEndpointCommandTrb) -> TrbCompletionCode {
+       let input_control_context =
+            match trb.get_deconfigure() {
+                1 >> {
+                    // From section 4.6.6 of the xHCI spec:
+                    // Setting the deconfigure (DC) flag to '1' in the Configure Endpoint Command
+                    // TRB is equivalent to setting Input Context Drop Context flags 2-31 to '1'
+                    // and Add Context 2-31 flags to '0'.
+                    let c = InputControlContex::new();
+                    c.set_add_context_flags(0);
+                    c.set_drop_context_flags(0xfffffffc);
+                    c
+                }
+                _>> mem.read_obj_from_addr(trb.get_input_context_pointer()).unwrap();
+            }
+
+       for device_context_index in 1..32 {
+           if input_control_context.drop_context_flag(device_context_index) {
+               self.drop_one_endpoint(device_context_index);
+           }
+           if input_control_context.add_context_flag(device_context_index) {
+               self.copy_context(trb.get_input_context_pointer(), device_context_index);
+               self.add_one_endpoint(trb.get_tr_dequeue_pointer(), device_context_index);
+           }
+       }
+
+       if trb.get_deconfigure() {
+           self.set_state(DeviceSlotState::Addressed);
+       } else {
+           self.set_state(DeviceSlotState::Configured);
+       }
+       TrbCompletionCode::Success;
     }
 
     // Evaluates the device context by reading new values for certain fields of
     // the slot context and/ or control endpoint context.
-    pub fn evaluate_context(&self, trb: EvaluateContextCommandTrb) {
+    pub fn evaluate_context(&self, trb: EvaluateContextCommandTrb) -> TrbCompletionCode {
+        if !self.enabled {
+            return TrbCompletionCode::SlotNotEnabledError;
+        }
+
+        let device_context = self.get_device_context();
+        match device_context.slot_context.get_state() {
+            DeviceSlotState::Default | DeviceSlotState::Addressed | DeviceSlotState::Configured
+                => return TrbCompletionCode::ContextStateError,
+            _ => (),
+        }
+
+        // TODO(jkwang) verify this
+        // The spec has multiple contradictions about validating context parameters in sections
+        // 4.6.7, 6.2.3.3. To keep things as simple as possible we do not further validation here.
+        let input_control_contex : InputControlContext =
+            self.mem.read_obj_from_addr(trb.get_input_context_pointer()).unwrap()
+
+        let mut device_context = self.get_device_context();
+        if input_control_context.add_context_flag(0) {
+            let input_slot_context: SlotContex =
+                self.mem.read_obj_from_addr(trb.get_input_context_pointer() +
+                                            DEVICE_CONTEXT_ENTRY_SIZE).unwrap();
+            device_context.slot_context.set_interrupter_target(
+                input_slot_context.get_interrupter_target()
+                );
+
+            device_context.slot_context.set_max_exit_latency(
+                input_slot_context.get_max_exit_latency()
+                );
+        }
+
+        // From 6.2.3.3: "Endpoint Contexts 2 throught 31 shall not be evaluated by the Evaluate
+        // Context Command".
+        if input_control_contex.add_context_flag(1) {
+            let ep0_context: EndpointContext =
+                mem.read_obj_from_addr(trb.get_input_context_pointer() +
+                                       2 * DEVICE_CONTEXT_ENTRY_SIZE).unwrap();
+            device_context.endpoint_context[0].set_max_packet_size(
+                ep0_context.get_max_packet_size()
+                );
+        }
+        self.set_device_context(device_context);
     }
 
     // Reset the device slot to default state and deconfigures all but the
     // control endpoint.
     pub fn reset_device(&self) {
+        let state = self.state();
+        if state != DeviceSlotState::Addressed &&
+            state != DeviceSlotState::Configured {
+                return;
+            }
+        for i in 2..32 {
+            self.drop_one_endpoint(i);
+        }
+        let ctx = self.get_device_context();
+        // TODO(jkwang) caution here
+        ctx.slot_context.set_state(DeviceSlotState::Default);
+        ctx.slot_context.context_entries(1);
+        ctx.slot_context.set_root_hub_port_number(0);
     }
 
     // Returns th ecuurent state of the device slot.
@@ -130,6 +224,9 @@ impl DeviceSlot {
     }
 
     pub fn set_state(&self, state: DeviceSlotState) {
+        let mut ctx = self.get_device_context();
+        ctx.set_state(state);
+        self.set_device_context(ctx);
     }
 
     // Returns the backend used by this device slot.
@@ -137,15 +234,41 @@ impl DeviceSlot {
     }
 
     fn get_device_context(&self) -> DeviceContext {
-        // TODO address
-        self.mem.read_obj_from_addr().unwrap()
+        self.mem.read_obj_from_addr(
+            xhci.get_device_context_addr(self.slot_id)
+            ).unwrap()
     }
 
     fn set_device_context(&self, device_context: DeviceContext) {
-        // Reall set device context.
+        self.write_obj_at_addr(device_context,
+                               xhci.get_device_context_addr(self.slot_id));
     }
 
-    fn copy_context(&self, input_context_pointer: GuestAddress, device_context_index: u8) {
+    fn copy_context(&self, input_context_ptr: GuestAddress, device_context_index: u8) {
+        let ctx = self.mem.read_obj_from_addr(input_context_ptr).unwrap();
+        self.mem.write_obj_at_addr(ctx,
+                                   xhci.get_device_context_addr(self.slot_id)
+                                   + (device_context_index * DEVICE_CONTEXT_ENTRY_SIZE));
+    }
+
+    fn add_one_endpoint(&mut self, input_context_ptr: GuestAddress, device_context_index: u8) {
+        let device_context  = self.get_device_context();
+        let transfer_ring_index = device_context_index - 1;
+        // TODO(jkwang) really init.
+        let trc = TransferRingController{};
+        trc.set_dequeue_pointer(device_context.endpoint_index[i].get_tr_dequeue_pointer() << 4);
+        trc.set_consumer_cycle_state(device_context.endpoint_index[i].get_dequeue_cycle_state());
+        self.transfer_ring_controllers[transfer_ring_index] = Some(trc);
+        device_context.endpoint_context[i].set_state(EndpointState::Running);
+    }
+
+    fn drop_one_endpoint(&mut self, device_context_index: u8) {
+        let endpoint_index = device_context_index - 1;
+        self.transfer_ring_controllers[i] = None;
+        let ctx = self.get_device_context();
+        ctx.endpoint_context[i].set_state(EndpointState::Disabled);
+        self.set_device_context(ctx);
     }
 }
+
 
