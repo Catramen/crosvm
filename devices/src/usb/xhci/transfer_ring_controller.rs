@@ -15,14 +15,6 @@ pub struct TransferRingController {
     device_slot: DeviceSlot,
 }
 
-type TransferTrb = AddressedTrb;
-impl AddressedTrb {
-    pub fn is_valid(&self, max_interrupters: u8) -> bool {
-        self.trb.can_in_transfer_ring() &&
-            (self.trb.interrupter_target() <= max_interrupters)
-    }
-}
-
 // Public
 impl TransferRingController {
     pub fn new(slot_id: u8, endpoint_id: u8, device_slot: DeviceSlot) {
@@ -33,11 +25,13 @@ impl TransferRingController {
         }
     }
 
-    pub fn handle_transfer_descriptor(&self, descriptor: &[AddressedTrb],
+}
+
+impl TransferDescriptorHandler for TransferRingController {
+    fn handle_transfer_descriptor(&self, descriptor: &[AddressedTrb],
                                       callback: Callback) {
     }
 }
-
 
 
 #[cfg(test)]
