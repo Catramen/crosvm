@@ -1,0 +1,59 @@
+// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+use std;
+
+use usb::libusb::bindings::*;
+use usb::libusb::error::*;
+use usb::libusb::device::*;
+
+// Wrapper for libusb_context. The libusb libary initialization/deinitialization
+// is managed by this context.
+// See: http://libusb.sourceforge.net/api-1.0/group__libusb__lib.html
+pub struct LibUSBContext {
+    context: *mut libusb_context,
+}
+
+impl Drop for LibUSBContext {
+    fn drop(&mut self) {
+        unsafe {
+            libusb_exit(self.context);
+        }
+    }
+}
+
+impl LibUSBContext {
+    pub fn new() -> Result<LibUSBContext> {
+        let mut ctx: *mut libusb_context = std::ptr::null_mut();
+        call_libusb_fn!(libusb_init(&mut ctx));
+        Ok(LibUSBContext { context: ctx })
+    }
+
+    // Device list is allocated by libusb and freed before this function returns.
+    // The devices handles are still alive cause libusb_ref_device is called when
+    // Device is constructed.
+    // See http://libusb.sourceforge.net/api-1.0/group__libusb__dev.html.
+    pub fn get_device_list(&self) -> Result<std::vec::Vec<Device>> {
+        let mut list: *mut *mut libusb_device = std::ptr::null_mut();
+        let n = call_libusb_fn!(libusb_get_device_list(self.context, &mut list));
+
+        let mut vec = Vec::new();
+        for i in 0..n {
+            unsafe {
+                vec.push(Device::new(self, *list.offset(i as isize)));
+            }
+        }
+
+        unsafe {
+            libusb_free_device_list(list, 1);
+        }
+        Ok(vec)
+    }
+
+    pub fn has_capability(&self, cap: u32) -> bool {
+        unsafe {
+            libusb_has_capability(cap) != 0
+        }
+    }
+}
