@@ -11,7 +11,7 @@ use usb::libusb::error::*;
 use usb::libusb::libusb_context::*;
 
 pub struct DeviceHandle<'a> {
-    _context: PhantomData<&'a LibUSBContext>,
+    _context: PhantomData<&'a LibUsbContext>,
     handle: *mut libusb_device_handle,
 }
 
@@ -24,7 +24,7 @@ impl <'a> Drop for DeviceHandle<'a> {
 }
 
 impl<'a> DeviceHandle<'a> {
-    pub fn new(c: PhantomData<&'a LibUSBContext>, handle: *mut libusb_device_handle) -> DeviceHandle<'a> {
+    pub fn new(c: PhantomData<&'a LibUsbContext>, handle: *mut libusb_device_handle) -> DeviceHandle<'a> {
         DeviceHandle {
             _context: c,
             handle: handle,
@@ -40,6 +40,24 @@ impl<'a> DeviceHandle<'a> {
     pub fn set_active_configuration(&mut self, config: i32) -> Result<()> {
         call_libusb_fn!(libusb_set_configuration(self.handle, config as c_int));
         Ok(())
+    }
+
+    pub fn claim_interface(interface_number: i32) -> Result<()> {
+    }
+
+    pub fn release_interface(interface_number: i32) -> Result<()> {
+    }
+
+    pub fn reset_device() {
+    }
+
+    pub fn kernel_driver_active(interface_number: i32) {
+    }
+
+    pub fn detach_kernel_driver(interface_number: i32) {
+    }
+
+    pub fn attach_kernel_driver(interface_number: i32) {
     }
 }
 

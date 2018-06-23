@@ -4,6 +4,10 @@
 
 type UsbDeviceAddress = u32;
 
+pub struct UsbBackend {
+    address: UsbDeviceAddress,
+}
+
 pub trait UsbBackendInterface {
     // Submits the transfer request to t he exectuion.
     fn submit_transfer(&self, transfer: UsbTransfer);

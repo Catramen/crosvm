@@ -13,12 +13,12 @@ use usb::libusb::device_descriptor::*;
 use usb::libusb::types::*;
 
 
-pub struct Device<'a> {
-    _context: std::marker::PhantomData<&'a LibUSBContext>,
+pub struct LibUsbDevice<'a> {
+    _context: std::marker::PhantomData<&'a LibUsbContext>,
     device: *mut libusb_device,
 }
 
-impl<'a> Drop for Device<'a> {
+impl<'a> Drop for LibUsbDevice<'a> {
     fn drop(&mut self) {
         unsafe {
             libusb_unref_device(self.device);
@@ -26,12 +26,12 @@ impl<'a> Drop for Device<'a> {
     }
 }
 
-impl<'a> Device<'a> {
-    pub fn new(_c: &'a LibUSBContext, device: *mut libusb_device) -> Device<'a> {
+impl<'a> LibUsbDevice<'a> {
+    pub fn new(_c: &'a LibUsbContext, device: *mut libusb_device) -> Device<'a> {
         unsafe {
             libusb_ref_device(device);
         }
-        Device {
+        LibUsbDevice {
             _context: std::marker::PhantomData,
             device: device,
         }
@@ -47,6 +47,9 @@ impl<'a> Device<'a> {
         let mut descriptor: *mut libusb_config_descriptor = std::ptr::null_mut();
         call_libusb_fn!(libusb_get_config_descriptor(self.device, idx, &mut descriptor));
         Ok(ConfigDescriptor::new(descriptor))
+    }
+
+    pub fn get_active_config_descriptor(&self) -> Result<ConfigDescriptor> {
     }
 
     pub fn get_bus_number(&self) -> u8 {
@@ -73,5 +76,6 @@ impl<'a> Device<'a> {
         call_libusb_fn!(libusb_open(self.device, &mut handle));
         Ok(DeviceHandle::new(self._context, handle))
     }
+
 }
 

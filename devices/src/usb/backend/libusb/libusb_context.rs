@@ -11,11 +11,11 @@ use usb::libusb::device::*;
 // Wrapper for libusb_context. The libusb libary initialization/deinitialization
 // is managed by this context.
 // See: http://libusb.sourceforge.net/api-1.0/group__libusb__lib.html
-pub struct LibUSBContext {
+pub struct LibUsbContext {
     context: *mut libusb_context,
 }
 
-impl Drop for LibUSBContext {
+impl Drop for LibUsbContext {
     fn drop(&mut self) {
         unsafe {
             libusb_exit(self.context);
@@ -23,11 +23,11 @@ impl Drop for LibUSBContext {
     }
 }
 
-impl LibUSBContext {
-    pub fn new() -> Result<LibUSBContext> {
+impl LibUsbContext {
+    pub fn new() -> Result<LibUsbContext> {
         let mut ctx: *mut libusb_context = std::ptr::null_mut();
         call_libusb_fn!(libusb_init(&mut ctx));
-        Ok(LibUSBContext { context: ctx })
+        Ok(LibUsbContext { context: ctx })
     }
 
     // Device list is allocated by libusb and freed before this function returns.
@@ -55,5 +55,11 @@ impl LibUSBContext {
         unsafe {
             libusb_has_capability(cap) != 0
         }
+    }
+
+    pub fn get_pollfds() {
+    }
+
+    pub fn set_pollfd_notifiers() {
     }
 }
