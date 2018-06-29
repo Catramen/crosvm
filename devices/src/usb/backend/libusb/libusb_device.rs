@@ -27,7 +27,7 @@ impl<'a> Drop for LibUsbDevice<'a> {
 }
 
 impl<'a> LibUsbDevice<'a> {
-    pub fn new(_c: &'a LibUsbContext, device: *mut libusb_device) -> Device<'a> {
+    pub fn new(_c: &'a LibUsbContext, device: *mut libusb_device) -> LibUsbDevice<'a> {
         unsafe {
             libusb_ref_device(device);
         }

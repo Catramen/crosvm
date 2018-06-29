@@ -7,6 +7,7 @@ use std;
 use usb::libusb::bindings::*;
 use usb::libusb::error::*;
 use usb::libusb::device::*;
+use usb::libusb::libusb_pollfd::*;
 
 // Wrapper for libusb_context. The libusb libary initialization/deinitialization
 // is managed by this context.
@@ -57,9 +58,26 @@ impl LibUsbContext {
         }
     }
 
-    pub fn get_pollfds() {
+    pub fn get_pollfds(&self) -> Result<std::vec::Vec<libusb_pollfd>> {
+        let mut vec = Vec::new();
+        let mut list: *mut *mut libusb_pollfd = unsafe {
+            libusb_get_pollfds(self.context)
+        }
+        unsafe {
+            let mut idx = 0;
+            while !list.offset(idx).is_null() {
+                vec.push(**list.offset(idx));
+                idx ++;
+            }
+            libusb_free_pollfds(list);
+        }
+        vec
     }
 
-    pub fn set_pollfd_notifiers() {
+    pub fn set_pollfd_notifiers<T: LibUsbPollfdChangeHandler>(&self,
+                                                              handler: T) -> Box<PollfdHandlerKeeper> {
+        PollfdHandlerKeeper::new(self, handler)
     }
+
 }
+

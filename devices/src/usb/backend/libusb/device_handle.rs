@@ -42,22 +42,34 @@ impl<'a> DeviceHandle<'a> {
         Ok(())
     }
 
-    pub fn claim_interface(interface_number: i32) -> Result<()> {
+    pub fn claim_interface(&self, interface_number: i32) -> Result<()> {
+        call_libusb_fn!(libusb_claim_interface(self.handle, interface_number));
+        Ok(())
     }
 
-    pub fn release_interface(interface_number: i32) -> Result<()> {
+    pub fn release_interface(&self, interface_number: i32) -> Result<()> {
+        call_libusb_fn!(libusb_release_interface(self.handle, interface_number));
+        Ok(())
     }
 
-    pub fn reset_device() {
+    pub fn reset_device(&self) -> Result<()> {
+        call_libusb_fn!(libusb_reset_device(self.handle));
+        Ok(())
     }
 
-    pub fn kernel_driver_active(interface_number: i32) {
+    pub fn kernel_driver_active(&self, interface_number: i32) -> Result<bool> {
+        let v = call_libusb_fn!(libusb_kernel_driver_active(self.handler, interface_number));
+        Ok(v != 0)
     }
 
-    pub fn detach_kernel_driver(interface_number: i32) {
+    pub fn detach_kernel_driver(&self, interface_number: i32) -> Result<()> {
+         call_libusb_fn!(libusb_detach_kernel_driver(self.handler, interface_number));
+         Ok(())
     }
 
-    pub fn attach_kernel_driver(interface_number: i32) {
+    pub fn attach_kernel_driver(&self, interface_number: i32) -> Result<()> {
+        call_libusb_fn!(libusb_attach_kernel_driver(self.handler, interface_number));
+        Ok(())
     }
 }
 

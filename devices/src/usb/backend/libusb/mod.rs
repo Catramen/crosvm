@@ -12,8 +12,8 @@ mod bindings;
 #[macro_use]
 mod error;
 mod libusb_context;
+mod libusb_device;
 mod config_descriptor;
-mod device;
 mod device_handle;
 mod device_descriptor;
 

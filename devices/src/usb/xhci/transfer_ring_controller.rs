@@ -31,6 +31,8 @@ impl TransferDescriptorHandler for TransferRingController {
     fn handle_transfer_descriptor(&self, descriptor: &[AddressedTrb],
                                       callback: Callback) {
     }
+
+    fn 
 }
 
 
