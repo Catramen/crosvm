@@ -71,5 +71,17 @@ impl<'a> DeviceHandle<'a> {
         call_libusb_fn!(libusb_attach_kernel_driver(self.handler, interface_number));
         Ok(())
     }
+
+    pub fn set_interface_alt_setting(&self, interface_number: i32,
+                                     alternative_settign: i32) -> Result<()> {
+        call_libusb_fn!(libusb_set_interface_alt_setting(self.handle, interface_number,
+                                                         alternative_settign));
+        Ok(())
+    }
+
+    pub fn clear_halt(&self, endpoint: u8) -> Result<()> {
+        call_libusb_fn!(libusb_clear_halt(self.handle, endpoint));
+        Ok(())
+    }
 }
 

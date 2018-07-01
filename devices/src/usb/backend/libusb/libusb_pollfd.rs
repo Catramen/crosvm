@@ -5,7 +5,8 @@
 use std::boxed::Box;
 
 use usb::libusb::bindings::*;
-use std::os::raw::{c_int, c_short};
+use std::os::raw::c_short;
+use std::os::unix::io::RawFd;
 
 pub struct PollfdHandlerKeeper<'a> {
     ctx: &'a LibUsbContext,
@@ -43,14 +44,14 @@ impl<'a> PollfdHandlerKeeper<'a> {
         keeper.handler.add_poll_fd(fd, events);
     }
 
-    pub fn pollfd_removed_cb(fd: c_int, events: c_short, keeper: *mut Pol) {
+    pub fn pollfd_removed_cb(fd: c_int, keeper: *mut Pol) {
         keeper.handler.remove_poll_fd(fd, events);
     }
 
 }
 
 pub trait LibUsbPollfdChangeHandler {
-    fn add_poll_fd(fd: c_int, events: c_short);
-    fn remove_poll_fd(fd: c_int, events: c_short);
+    fn add_poll_fd(fd: RawFd, events: c_short);
+    fn remove_poll_fd(fd: RawFd);
 }
 

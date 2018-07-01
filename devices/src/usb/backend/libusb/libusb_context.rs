@@ -79,5 +79,14 @@ impl LibUsbContext {
         PollfdHandlerKeeper::new(self, handler)
     }
 
+    pub fn handle_event_nonblock(&self) {
+        static zero_time = timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        };
+        unsafe {
+            libusb_handle_events_timeout_completed(self.context, &zero_time, std::ptr::null());
+        }
+    }
 }
 
