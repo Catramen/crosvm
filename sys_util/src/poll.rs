@@ -210,6 +210,29 @@ impl<T: PollToken> PollEventsOwned<T> {
     }
 }
 
+/// Watching events taken by PollContext.
+pub struct WatchingEvents(u32);
+
+impl WatchingEvents {
+    /// Returns empty Events.
+    #[inline(always)]
+    pub fn empty() -> WatchingEvents {
+        WatchingEvents(0)
+    }
+
+    /// Build Events from raw event.
+    #[inline(always)]
+    pub fn new(raw: u32) -> WatchingEvents {
+        WatchingEvents(raw)
+    }
+
+    /// Set read events.
+    #[inline(always)]
+    pub fn set_read(self) -> WatchingEvents {
+        WatchingEvents(self.0 | EPOLLIN as u32)
+    }
+}
+
 /// Used to poll multiple objects that have file descriptors.
 ///
 /// # Example
@@ -268,14 +291,25 @@ impl<T: PollToken> PollContext<T> {
            })
     }
 
-    /// Adds the given `fd` to this context and associates the given `token` with the `fd`'s events.
+    /// Adds the given `fd` to this context and associates the given `token` with the `fd`'s
+    /// readable events.
     ///
     /// A `fd` can only be added once and does not need to be kept open. If the `fd` is dropped and
     /// there were no duplicated file descriptors (i.e. adding the same descriptor with a different
     /// FD number) added to this context, events will not be reported by `wait` anymore.
     pub fn add(&self, fd: &AsRawFd, token: T) -> Result<()> {
+        self.add_fd_with_events(fd, WatchingEvents::empty().set_read(), token)
+    }
+
+    /// Adds the given 'fd' to this context, watching for the specified events and associates the
+    /// given 'token' with those events.
+    ///
+    /// A `fd` can only be added once and does not need to be kept open. If the `fd` is dropped and
+    /// there were no duplicated file descriptors (i.e. adding the same descriptor with a different
+    /// FD number) added to this context, events will not be reported by `wait` anymore.
+    pub fn add_fd_with_events(&self, fd: &AsRawFd, events: WatchingEvents, token: T) -> Result<()> {
         let mut evt = epoll_event {
-            events: EPOLLIN as u32,
+            events: events.0,
             u64: token.as_raw_token(),
         };
         // Safe because we give a valid epoll FD and FD to watch, as well as a valid epoll_event
@@ -296,11 +330,11 @@ impl<T: PollToken> PollContext<T> {
         Ok(())
     }
 
-    /// If `fd` was previously added to this context, the token associated with it will be replaced
-    /// with the given `token`.
-    pub fn modify(&self, fd: &AsRawFd, token: T) -> Result<()> {
+    /// If `fd` was previously added to this context, the watched events will be replaced with
+    /// 'events and the token associated with it will be replaced with the given `token`.
+    pub fn modify(&self, fd: &AsRawFd, events: WatchingEvents, token: T) -> Result<()> {
         let mut evt = epoll_event {
-            events: EPOLLIN as u32,
+            events: events.0,
             u64: token.as_raw_token(),
         };
         // Safe because we give a valid epoll FD and FD to modify, as well as a valid epoll_event
