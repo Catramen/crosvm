@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 use std;
+use std::os::raw::{c_short, c_void};
+use std::os::unix::io::RawFd;
 use std::marker::PhantomData;
 use std::slice;
 
@@ -15,10 +17,13 @@ use libusb_device::LibUsbDevice;
 /// See: http://libusb.sourceforge.net/api-1.0/group__libusb__lib.html
 pub struct LibUsbContext {
     context: *mut bindings::libusb_context,
+    pollfd_change_handler: Option<Box<PollfdChangeHandlerHolder>>,
 }
 
 impl Drop for LibUsbContext {
     fn drop(&mut self) {
+        // Avoid pollfd change handler call when libusb_exit is called.
+        self.remove_pollfd_notifiers();
         // Safe beacuse 'self.context' points to a valid context allocated by libusb_init.
         unsafe {
             bindings::libusb_exit(self.context);
@@ -34,7 +39,7 @@ impl LibUsbContext {
         handle_libusb_error!(unsafe {
             bindings::libusb_init(&mut ctx)
         });
-        Ok(LibUsbContext { context: ctx })
+        Ok(LibUsbContext { context: ctx, pollfd_change_handler: None })
     }
 
 
@@ -77,7 +82,7 @@ impl LibUsbContext {
     }
 
     /// Handle libusb events in a non block way.
-    pub fn handle_event_nonblock(&self) {
+    pub fn handle_events_nonblock(&self) {
         static mut zero_time: bindings::timeval = bindings::timeval {
             tv_sec: 0,
             tv_usec: 0,
@@ -89,6 +94,33 @@ impl LibUsbContext {
                 &mut zero_time as *mut bindings::timeval,
                 std::ptr::null_mut(),
             );
+        }
+    }
+
+    /// Set a handler that could handle pollfd change events.
+    pub fn set_pollfd_notifiers(&mut self, handler: Box<LibUsbPollfdChangeHandler>) {
+        // LibUsbContext is alive when any libusb related function is called. It owns the handler,
+        // thus the handler memory is always valid when callback is invoked.
+        let holder = Box::new(PollfdChangeHandlerHolder { handler, });
+        let raw_holder = Box::into_raw(holder);
+        unsafe {
+            bindings::libusb_set_pollfd_notifiers(
+                self.context,
+                Some(pollfd_added_cb),
+                Some(pollfd_removed_cb),
+                raw_holder as *mut c_void,
+            );
+        }
+        // Safe because raw_holder is from Boxed pointer.
+        let holder = unsafe { Box::from_raw(raw_holder) };
+        self.pollfd_change_handler = Some(holder);
+    }
+
+    /// Remove the previous registered notifiers.
+    pub fn remove_pollfd_notifiers(&self) {
+        // Safe because 'self.context' is valid.
+        unsafe {
+            bindings::libusb_set_pollfd_notifiers(self.context, None, None, std::ptr::null_mut());
         }
     }
 }
@@ -161,4 +193,28 @@ impl Iterator for PollFdIter {
             (**current_ptr).clone()
         })
     }
+}
+
+/// Trait for handler that handles Pollfd Change events.
+pub trait LibUsbPollfdChangeHandler {
+    fn add_poll_fd(&self, fd: RawFd, events: c_short);
+    fn remove_poll_fd(&self, fd: RawFd);
+}
+
+// This struct owns LibUsbPollfdChangeHandler. We need it because it's not possible to cast void
+// pointer to trait pointer.
+struct PollfdChangeHandlerHolder {
+    handler: Box<LibUsbPollfdChangeHandler>,
+}
+
+extern "C" fn pollfd_added_cb(fd: RawFd, events: c_short, user_data: *mut c_void) {
+    // Safe because user_data was casted from hoder.
+    let keeper = unsafe { &*(user_data as *mut PollfdChangeHandlerHolder) };
+    keeper.handler.add_poll_fd(fd, events);
+}
+
+extern "C" fn pollfd_removed_cb(fd: RawFd, user_data: *mut c_void) {
+    // Safe because user_data was casted from hoder.
+    let keeper = unsafe { &*(user_data as *mut PollfdChangeHandlerHolder) };
+    keeper.handler.remove_poll_fd(fd);
 }
