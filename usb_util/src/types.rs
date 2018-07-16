@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use data_model::DataInit;
 use bindings;
 
 /// Speed of usb device. See usb spec for more details.
@@ -28,5 +29,36 @@ impl From<bindings::libusb_speed> for Speed {
             bindings::LIBUSB_SPEED_SUPER => Speed::Super,
             _ => Speed::Unknown,
         }
+    }
+}
+
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+pub struct UsbRequestSetup {
+    // USB Device Request. USB spec. rev. 2.0 9.3
+    pub request_type: u8,    // bmRequestType
+    pub request: u8,       // bRequest
+    pub value: u16,        // wValue
+    pub index: u16,        // wIndex
+    pub length: u16,       // wLength
+}
+
+unsafe impl DataInit for UsbRequestSetup {}
+
+/// Usb transfer types. See spec for more details.
+pub enum TransferType {
+    In,
+    Out,
+    Setup,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::size_of;
+    use super::*;
+
+    #[test]
+    fn check_request_setup_size() {
+        assert_eq!(size_of::<UsbRequestSetup>(), 8);
     }
 }
