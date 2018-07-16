@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 use bindings;
+use data_model::DataInit;
 
 /// Speed of usb device. See usb spec for more details.
 #[derive(Debug)]
@@ -90,6 +91,7 @@ pub enum StandardControlRequest {
     SetInterface = 0x11,
     SynchFrame = 0x12,
 }
+
 /// RequestSetup is first part of control transfer buffer.
 #[repr(C, packed)]
 #[derive(Copy, Clone)]

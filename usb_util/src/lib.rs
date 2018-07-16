@@ -9,6 +9,8 @@
 #![allow(non_upper_case_globals)]
 mod bindings;
 
+extern crate data_model;
+
 #[macro_use]
 pub mod error;
 pub mod config_descriptor;
@@ -16,3 +18,4 @@ pub mod device_handle;
 pub mod libusb_context;
 pub mod libusb_device;
 pub mod types;
+pub mod usb_transfer;
