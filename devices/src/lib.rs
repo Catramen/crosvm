@@ -23,6 +23,7 @@ mod i8042;
 mod pci;
 mod proxy;
 mod serial;
+mod usb;
 pub mod pl030;
 pub mod virtio;
 
