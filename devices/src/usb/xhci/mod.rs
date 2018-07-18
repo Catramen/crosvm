@@ -5,3 +5,5 @@
 #[macro_use]
 mod mmio_register;
 mod mmio_space;
+
+mod xhci_regs;
