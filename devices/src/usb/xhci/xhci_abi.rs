@@ -349,6 +349,34 @@ impl Trb {
     }
 }
 
+// TODO(jkwang) use BitFieldBool in LinkTrb.
+impl LinkTrb {
+    /// Get cycle.
+    pub fn get_cycle_bit(&self) -> bool {
+        self.get_cycle() != 0
+    }
+
+    /// Get toggle cycle.
+    pub fn get_toggle_cycle_bit(&self) -> bool {
+        self.get_toggle_cycle() != 0
+    }
+
+    /// set chain status.
+    pub fn set_chain_bit(&mut self, v: bool) {
+        self.set_chain(v as u8);
+    }
+
+    /// Get chain status.
+    pub fn get_chain_bit(&self) -> bool {
+        self.get_chain() != 0
+    }
+
+    /// Get interrupt on completion.
+    pub fn interrupt_on_completion(&self) -> bool {
+        self.get_interrupt_on_completion() != 0
+    }
+}
+
 /// Trait for enum that could be converted from raw u8.
 pub trait PrimitiveEnum: Sized {
     fn from_raw(val: u8) -> Option<Self>;
