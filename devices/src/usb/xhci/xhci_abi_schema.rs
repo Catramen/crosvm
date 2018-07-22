@@ -79,7 +79,7 @@ const SEGMENT_TABLE_SIZE: usize = 16;
 
 // Schema of generic TRB struct containing only fields common to all types.
 #[derive(BitField)]
-#[passthrough(derive(Clone, Copy))]
+#[passthrough(derive(Clone, Copy, PartialEq))]
 pub struct TrbSchema {
     parameter: B64,
     status: B32,
@@ -506,7 +506,7 @@ pub struct DeviceContext {
 /// POD struct associates a TRB with its address in guest memory.  This is
 /// useful because transfer and command completion event TRBs must contain
 /// pointers to the original TRB that generated the event.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AddressedTrb {
     pub trb: Trb,
     pub gpa: u64,
