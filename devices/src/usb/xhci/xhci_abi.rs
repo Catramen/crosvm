@@ -71,6 +71,11 @@ impl Trb {
         TrbType::from_raw(self.get_trb_type())
     }
 
+    /// Get cycle bit.
+    pub fn get_cycle_bit(&self) -> bool {
+        self.get_cycle() != 0
+    }
+
     /// Set cyle bit.
     pub fn set_cycle_bit(&mut self, b: bool) {
         match b {
@@ -143,6 +148,36 @@ impl Trb {
     }
 }
 
+impl LinkTrb {
+    /// Get cycle.
+    pub fn get_cycle_bit(&self) -> bool {
+        self.get_cycle() != 0
+    }
+
+    /// Get toggle cycle.
+    pub fn get_toggle_cycle_bit(&self) -> bool {
+        self.get_toggle_cycle() != 0
+    }
+
+    /// set chain status.
+    pub fn set_chain_bit(&mut self, v: bool) {
+        match v {
+            true => self.set_chain(1),
+            false => self.set_chain(0),
+        }
+    }
+
+    /// Get chain status.
+    pub fn get_chain_bit(&self) -> bool {
+        self.get_chain() != 0
+    }
+
+    /// Get interrupt on completion.
+    pub fn interrupt_on_completion(&self) -> bool {
+        self.get_interrupt_on_completion() != 0
+    }
+}
+
 /// Trait for enum that could be converted from raw u8.
 pub trait PrimitiveEnum {
     fn from_raw(val: u8) -> Option<Self>
@@ -151,6 +186,7 @@ pub trait PrimitiveEnum {
 }
 
 /// All kinds of trb.
+#[derive(PartialEq, Debug)]
 pub enum TrbType {
     Reserved = 0,
     Normal = 1,
