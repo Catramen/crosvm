@@ -112,8 +112,9 @@ impl EventLoop {
 
     /// Removes event for this RawFd.
     pub fn remove_event_for_fd(&self, fd: RawFd) {
-        self.cmd_tx.send(EpollThreadEvents::DeleteFd(fd)).unwrap();
-        self.cmd_evt.write(1).unwrap();
+        /// Simply do nothing if the event loop is stopped.
+        let _ = self.cmd_tx.send(EpollThreadEvents::DeleteFd(fd));
+        let _ = self.cmd_evt.write(1);
     }
 
     /// Stops this event loop asynchronously. Triggered events might not be handled.
