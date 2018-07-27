@@ -90,6 +90,11 @@ impl EventRing {
         self.dequeue_pointer = addr;
     }
 
+    /// Get the enqueue pointer.
+    pub fn get_enqueue_pointer(&self) -> GuestAddress {
+        self.enqueue_pointer
+    }
+
     /// Check if event ring is empty.
     pub fn is_empty(&self) -> Result<bool> {
         self.check_inited()?;

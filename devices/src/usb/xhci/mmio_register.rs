@@ -306,6 +306,18 @@ where
     pub fn set_value(&self, val: T) {
         self.inner.lock().unwrap().value = val;
     }
+
+    pub fn set_bits(&self, bits: T) {
+        let cur_value: u64 = self.get_value().into();
+        let new_value: u64 = cur_value | bits.into();
+        self.set_value(new_value);
+    }
+
+    pub fn clear_bits(&self, bits: T) {
+        let cur_value: u64 = self.get_value().into();
+        let new_value: u64 = cur_value & (!bits.into());
+        self.set_value(new_value);
+    }
 }
 
 #[macro_export]

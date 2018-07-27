@@ -8,7 +8,7 @@ use sys_util::{GuestAddress, GuestMemory};
 
 use super::xhci_abi::*;
 
-type TransferDescriptor = Vec<AddressedTrb>;
+pub type TransferDescriptor = Vec<AddressedTrb>;
 
 /// Ring Buffer is segmented circular buffer in guest memory containing work items
 /// called transfer descriptors, each of which consists of one or more TRBs.
