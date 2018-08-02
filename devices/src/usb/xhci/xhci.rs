@@ -12,6 +12,7 @@ use pci::pci_configuration::{
 
 /// xHCI controller implementation.
 pub struct Xhci {
+    mem: GuestMemory,
     regs: XHCIRegs,
     command_ring_controller: CommandRingController,
 }
@@ -25,14 +26,15 @@ impl Xhci {
             );
 
     }
-
-    pub fn reset() {
+    pub fn guest_mem(&self) -> &GuestMemory {
+        self.mem
     }
 
     pub fn usbcmd_callback(&self, value: u32) {
         if value & USB_CMD_RESET {
             self.regs.usbsts.set_bits(USB_STS_CONTROLLER_NOT_READY);
             self.reset();
+            return;
         }
 
         if value & USB_CMD_RUNSTOP {
@@ -77,6 +79,9 @@ impl Xhci {
     }
 
     pub fn erdp_callback(&self, interrupter_index: i32, value: u32) {
+    }
+
+    fn reset() {
     }
 
 

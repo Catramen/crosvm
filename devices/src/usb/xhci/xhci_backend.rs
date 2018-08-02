@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 pub type UsbDeviceAddress = u32;
+
+/// Xhci backend is a virtual device connected to xHCI controller. It handles xhci transfers.
 pub trait XhciBackend {
     fn submit_transfer(transfer: XhciTransfer);
     fn set_address(address: UsbDeviceAddress);

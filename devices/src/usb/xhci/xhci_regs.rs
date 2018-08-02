@@ -13,7 +13,7 @@ use super::mmio_register::{
     StaticRegisterSpec,
 };
 
-pub const XHCI_BAR0_SIZE = 0xd000;
+pub const XHCI_BAR0_SIZE: u64 = 0xd000;
 
 pub const XHCI_CAPLENGTH: u8 = 0x20;
 pub const XHCI_DBOFF: u32 = 0x00002000;

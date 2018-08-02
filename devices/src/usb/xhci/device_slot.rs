@@ -20,11 +20,11 @@ pub struct DeviceSlot {
     slot_id: u8,
     enabled: bool,
     backend: Option<UsbBackend>,
-    transfer_controllers: [Option<transfer_ring_controller>; 31],
+    transfer_ring_controller: [Option<transfer_ring_controller>; 31],
 }
 
 impl DeviceSlot {
-    pub fn new(mem: GuestMemory, slot_id: u8, xhci: &Arc<Xhci>) -> Self {
+    pub fn new(slot_id: u8, mem: GuestMemory, xhci: &Arc<Xhci>) -> Self {
         DeviceSlot {
             xhci: Arc::downgrade(xhci),
             mem,

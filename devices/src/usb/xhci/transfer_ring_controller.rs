@@ -13,6 +13,7 @@ use super::xhci_abi::{
 
 use super::ring_buffer::RingBuffer;
 use super::ring_buffer::RingBufferController;
+use super::xhci_transfer::XhciTransfer;
 
 pub type TransferRingController = RingBufferController<TransferRingTrbHandler>;
 
@@ -24,8 +25,21 @@ struct TransferRingTrbHandler {
 }
 
 impl TransferDescriptorHandler for TransferRingTrbHandler {
-    fn handle_transfer_descriptor(&self, descriptor: TransferDescriptor, complete_event: EventFd) {
+    fn handle_transfer_descriptor(&self,
+                                  descriptor: TransferDescriptor,
+                                  completion_event: EventFd) {
+        let xhci_transfer = XhciTransfer::new(
+            self.xhci,
+            self.endpoint_id,
+            descriptor,
+            completion_event.try_clone().unwrap(),
+            );
+        xhci_transfer.submit_to_backend(&self.backend);
+    }
+}
 
+impl TransferRingController {
+    pub fn new() -> TransferRingController {
     }
 }
 

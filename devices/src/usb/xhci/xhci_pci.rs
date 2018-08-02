@@ -25,16 +25,15 @@ impl XhciDevice {
             header_type: PciHeaderType::Device,
             );
         let (mmio, regs) = init_xhci_mmio_space_and_regs();
-        Xhci {
+        XhciDevice {
             config_regs,
             mmio,
-            regs,
         }
     }
 
 }
 
-impl PciDevice for Xhci {
+impl PciDevice for XhciDevice {
     fn assign_irq(&mut self, irq_evt: EventFd, irq_num: u32, irq_pin: PciInterruptPin) {
     }
 

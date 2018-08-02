@@ -151,3 +151,10 @@ impl TransferDescriptorHandler for CommandRingTrbHandler {
         complete_event.write(1);
     }
 }
+
+pub type CommandRingController = RingBufferController<CommandRingTrbHandler>;
+
+impl CommandRingController {
+    pub fn new() {
+    }
+}

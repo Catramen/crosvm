@@ -11,8 +11,6 @@ use sys_util::{
 use usb_util::TransferType;
 
 pub enum TransferStatus {
-    // The transfer is built, but not sent yet.
-    NotSent,
     // The transfer completed with error.
     Error,
     // The transfer completed successfuly.
@@ -22,17 +20,16 @@ pub enum TransferStatus {
 pub struct XhciTransfer {
     xhci: Weak<Xhci>,
     transfer_completion_event: EventFd,
-    mem: GuestMemory,
     ty: TransferType,
     endpoint_id: u8,
     transfer_trbs: TransferDescriptor,
 }
 
 impl XhciTransfer {
-    pub fn new(xhci: &Arc<Xhci>,
-               mem: GuestMemory,
+    pub fn new(xhci: &Weak<Xhci>,
                endpoint_id: u8,
-               transfer_trbs: TransferDescriptor) -> Self {
+               transfer_trbs: TransferDescriptor,
+               completion_event: EventFd) -> Self {
         assert!(transfer_trbs.len() > 0);
         let first_trb = transfer_trbs[0].trb;
         // For more information about transfer types, refer to xHCI spec 3.2.9 and 3.2.10.
@@ -62,43 +59,72 @@ impl XhciTransfer {
             _ => panic!("Invalid trb type");
         }
         XhciTransfer {
-            xhci: Arc::downgrade(xhci),
-            mem,
+            xhci: xhci.clone(),
+            transfer_completion_event: completion_event,
             ty: TransferType,
             endpoint_id,
             transfer_trbs,
         }
     }
 
-    pub fn is_valid(atrb: &AddressedTrb, max_interrupters: u8) -> bool {
-        self.trb.can_in_transfer_ring() &&
-            (self.trb.interrupter_target() <= max_interrupters)
-    }
-
-    // Check each trb in the transfer descriptor for invalid or out of bounds
-    // parameters. Returns true iff the transfer descriptor is valid.
-    pub fn validate_trb(&self, max_interrupters: u32) -> Result<(), Vec<GuestAddress>> {
-        let invalid_vec = Vec::new();
-        for trb in self.transfer_trbs {
-            if !trb.is_valid() {
-                invalid_vec.push(trb.gpa());
-            }
-        }
-        if invalid_vec.is_empty() {
-            Ok(())
+    pub fn submit_to_backend<T: XhciBackend>(self, backend: &T) {
+        if self.is_valid() {
         } else {
-            Err(invalid_vec)
+            backend.submit_transfer();
         }
     }
 
-    pub fn on_transfer_complete(&self, bytes_transferred: u32) {
+    // TODO(jkwang) rewrite this part.
+    pub fn on_transfer_complete(&self, status: TransferStatus, bytes_transferred: u32) {
         self.transfer_completion_event.write(1);
         let mut edtla: u32 = 0;
-        for trb in self.transfer_trbs {
+        // As noted in xHCI spec 4.11.3.1
+        // Transfer Event Trb only occur under the following conditions:
+        //   1. If the Interrupt On Completion flag is set.
+        //   2. When a short tansfer occurs during the execution of a Transfer TRB and the
+        //      Interrupter-on-Short Packet flag is set.
+        //   3. If an error occurs during the execution of a Transfer Trb.
+        for atrb in self.transfer_trbs {
+            edtla += atrb.trb.transfer_length()
+                if atrb.trb.interrupt_on_completion() {
+                    // For details about event data trb and EDTLA, see spec 4.11.5.2.
+                    if atrb.trb.trb_type() == TrbType::EventData {
+                        let tlength: u32 = min(edtla, bytes_transferred);
+                        self.send_transfer_event_trb(
+                            TrbCompletionCode::Success,
+                            atrb.trb.interrupter_target(),
+                            atrb.trb.cast<EventDataTrb>().get_event_data(),
+                            tlength,
+                            true
+                            );
+                    } else {
+                        // Short Transfer details, see xHCI spec 4.10.1.1.
+                        let residual_transfer_length: u32 = edtla - bytes_transferred;
+                        if edtla > bytes_transferred {
+                            self.send_transfer_event_trb(
+                                TrbCompletionCode::ShortPacket,
+                                atrb.trb.interrupter_target(),
+                                atrb.gpa.0,
+                                residual_transfer_length,
+                                true
+                                );
+
+                        } else {
+                            self.send_transfer_event_trb(
+                                TrbCompletionCode::Success,
+                                atrb.trb.interrupter_target(),
+                                atrb.gpa.0,
+                                residual_transfer_length,
+                                true
+                                );
+                        }
+                    }
+                }
+
         }
     }
 
-    pub fn send_transfer_event_trb(&self,
+    fn send_transfer_event_trb(&self,
                                    completion_code: TrbCompletionCode,
                                    interrupter_target: u16,
                                    trb_pointer: u64,
@@ -115,7 +141,27 @@ impl XhciTransfer {
         self.xhci.upgrade().unwrap().interrupter(interrupter_target).add_event(trb.cast<Trb>());
     }
 
-    pub fn update_status(&mut self, status: TransferStatus) {
+    fn is_valid(atrb: &AddressedTrb, max_interrupters: u8) -> bool {
+        atrb.trb.can_in_transfer_ring() &&
+            (atrb.trb.interrupter_target() <= max_interrupters)
     }
+
+    // Check each trb in the transfer descriptor for invalid or out of bounds
+    // parameters. Returns true iff the transfer descriptor is valid.
+    fn validate_trb(&self, max_interrupters: u32) -> Result<(), Vec<GuestAddress>> {
+        let invalid_vec = Vec::new();
+        for atrb in self.transfer_trbs {
+            if !is_valid(atrb, max_interrupters) {
+                invalid_vec.push(trb.gpa());
+            }
+        }
+        if invalid_vec.is_empty() {
+            Ok(())
+        } else {
+            Err(invalid_vec)
+        }
+    }
+
+
 }
 
