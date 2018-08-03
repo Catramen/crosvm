@@ -23,12 +23,20 @@ use super::ring_buffer::RingBuffer;
 
 type TransferDescriptor = Vec<AddressedTrb>;
 
+enum RingBufferState {
+    Running,
+    Stopping,
+    Stopped,
+}
+
 pub trait TransferDescriptorHandler {
     /// Process descriptor asynchronously, write complete_event when finishes.
     fn handle_transfer_descriptor(&self, descriptor: TransferDescriptor, complete_event: EventFd);
 }
 
 pub struct RingBufferController<T: 'static + TransferDescriptorHandler> {
+    state: Mutex<RingBufferState>,
+    stop_callback: Mutex<Vec<AutoCallback>>,
     ring_buffer: Mutex<RingBuffer>,
     handler: T,
     event_loop: EventLoop,
@@ -66,8 +74,21 @@ impl<T> RingBufferController<T> where T: 'static + TransferDescriptorHandler {
         self.ring_buffer.lock().unwrap().set_consumer_cycle_state(state);
     }
 
-    pub fn handle_one(&self) {
-        self.event.write(1).unwrap();
+    pub fn start(&self) {
+        let mut state = self.state.lock().unwrap();
+        if *state != RingBufferState::Running {
+            *state = RingBufferState::Running;
+            self.event.write(1).unwrap();
+        }
+    }
+
+    pub fn stop(&self, callback: AutoCallback) {
+        let mut state = self.state.lock().unwrap();
+        if *state == RingBufferState::Stopped {
+            return;
+        }
+        *state = RingBufferState::Stopping;
+        self.stop_callback.lock().unwrap().push(callback);
     }
 }
 
@@ -82,8 +103,23 @@ impl<T> Drop for RingBufferController<T> where T: 'static + TransferDescriptorHa
 impl<T> EventHandler for RingBufferController<T> where T: 'static + TransferDescriptorHandler {
     fn on_event(&self, _fd: RawFd) {
         let _ = self.event.read();
-        let mut ring_buffer = self.ring_buffer.lock().unwrap();
-        let transfer_descriptor = ring_buffer.dequeue_transfer_descriptor().unwrap();
+        let transfer_descriptor = {
+            let mut ring_buffer = self.ring_buffer.lock().unwrap();
+            ring_buffer.dequeue_transfer_descriptor()
+        };
+
+        let transfer_descriptor = {
+            let mut state = self.state.lock().unwrap();
+            if *state == RingBufferState::Stopped {
+                return;
+            } else if *state == RingBuffer::Stopping || transfer_descriptor.is_none() {
+                *state = RingBufferState::Stopped;
+                self.stop_callback.lock().unwrap().clear();
+                return;
+            }
+            transfer_descriptor.unwrap()
+        };
+
         let event = self.event.try_clone().unwrap();
         self.handler.handle_transfer_descriptor(transfer_descriptor, event);
     }
@@ -170,12 +206,12 @@ mod tests {
                                                                  });
         controller.set_dequeue_pointer(GuestAddress(0x100));
         controller.set_consumer_cycle_state(false);
-        controller.handle_one();
+        controller.start();
         assert_eq!(rx.recv().unwrap(), 1);
         assert_eq!(rx.recv().unwrap(), 2);
         assert_eq!(rx.recv().unwrap(), 3);
         assert_eq!(rx.recv().unwrap(), 4);
-        controller.handle_one();
+        controller.start();
         assert_eq!(rx.recv().unwrap(), 5);
         assert_eq!(rx.recv().unwrap(), 6);
         l.stop();

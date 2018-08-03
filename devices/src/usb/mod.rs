@@ -5,3 +5,5 @@
 mod xhci;
 #[allow(dead_code)]
 mod event_loop;
+
+mod auto_callback;
