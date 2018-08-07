@@ -20,13 +20,8 @@ pub struct Xhci {
 
 impl Xhci {
     pub fn new(mem: GuestMemory, regs: XHCIRegs) -> Arc<Self> {
-        let xhci = Arc::new(
-            Xhci {
-                regs,
-            }
-            );
-
     }
+
     pub fn guest_mem(&self) -> &GuestMemory {
         self.mem
     }

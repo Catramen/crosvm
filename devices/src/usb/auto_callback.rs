@@ -12,7 +12,7 @@ pub struct AutoCallback {
 }
 
 impl AutoCallback {
-    fn new<C: 'static + Fn()>(cb: C) -> AutoCallback {
+    pub fn new<C: 'static + Fn()>(cb: C) -> AutoCallback {
         AutoCallback {
             inner: Arc::new(AutoCallbackInner {
                 callback: Box::new(cb),

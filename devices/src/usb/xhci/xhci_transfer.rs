@@ -161,7 +161,5 @@ impl XhciTransfer {
             Err(invalid_vec)
         }
     }
-
-
 }
 
