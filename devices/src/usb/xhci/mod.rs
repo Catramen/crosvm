@@ -8,6 +8,7 @@ mod mmio_space;
 
 mod event_ring;
 mod ring_buffer;
+mod ring_buffer_controller;
 #[allow(dead_code)]
 mod xhci_abi;
 #[allow(dead_code)]
