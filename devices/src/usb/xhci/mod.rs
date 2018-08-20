@@ -7,6 +7,8 @@ mod event_ring;
 #[allow(unused_imports, dead_code)]
 mod ring_buffer;
 #[allow(unused_imports, dead_code)]
+mod ring_buffer_controller;
+#[allow(unused_imports, dead_code)]
 #[macro_use]
 mod mmio_register;
 #[allow(unused_imports, dead_code)]
