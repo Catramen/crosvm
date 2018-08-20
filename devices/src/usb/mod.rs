@@ -4,4 +4,5 @@
 
 pub mod xhci;
 
+mod auto_callback;
 mod event_loop;
