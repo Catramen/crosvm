@@ -14,6 +14,8 @@ mod mmio_register;
 #[allow(unused_imports, dead_code)]
 mod mmio_space;
 #[allow(unused_imports, dead_code)]
+mod xhci;
+#[allow(unused_imports, dead_code)]
 mod xhci_abi_schema;
 #[allow(unused_imports, dead_code)]
 mod xhci_abi;
