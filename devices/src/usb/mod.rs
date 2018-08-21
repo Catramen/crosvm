@@ -4,7 +4,8 @@
 
 #[allow(dead_code)]
 mod auto_callback;
-mod xhci;
 #[allow(dead_code)]
 mod event_loop;
+
+pub mod xhci;
 

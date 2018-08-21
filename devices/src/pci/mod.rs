@@ -10,7 +10,7 @@ mod pci_root;
 
 pub use self::pci_configuration::{
     PciCapability, PciCapabilityID, PciClassCode, PciConfiguration, PciHeaderType,
-    PciProgrammingInterface, PciSubclass,
+    PciProgrammingInterface, PciSubclass, PciSerialBusSubClass
 };
 pub use self::pci_device::Error as PciDeviceError;
 pub use self::pci_device::PciDevice;
