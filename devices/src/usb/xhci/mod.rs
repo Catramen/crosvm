@@ -12,6 +12,8 @@ mod ring_buffer_controller;
 #[macro_use]
 mod mmio_register;
 #[allow(unused_imports, dead_code)]
+mod interrupter;
+#[allow(unused_imports, dead_code)]
 mod xhci_abi_schema;
 #[allow(unused_imports, dead_code)]
 mod xhci_abi;
