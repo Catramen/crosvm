@@ -7,6 +7,8 @@ mod mmio_register;
 mod mmio_space;
 
 mod event_ring;
+mod interrupter;
+mod intr_resample_handler;
 mod ring_buffer;
 mod ring_buffer_controller;
 #[allow(dead_code)]
