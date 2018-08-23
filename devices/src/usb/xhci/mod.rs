@@ -17,3 +17,6 @@ mod xhci_abi;
 mod xhci_abi_schema;
 #[allow(dead_code)]
 mod xhci_regs;
+
+pub mod xhci_backend_device;
+pub mod xhci_transfer;
