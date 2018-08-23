@@ -143,6 +143,7 @@ dependencies = [
  "p9 0.1.0",
  "resources 0.1.0",
  "sys_util 0.1.0",
+ "usb_util 0.1.0",
  "vhost 0.1.0",
  "virtio_sys 0.1.0",
  "vm_control 0.1.0",

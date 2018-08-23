@@ -14,12 +14,16 @@ mod mmio_register;
 #[allow(unused_imports, dead_code)]
 mod interrupter;
 #[allow(unused_imports, dead_code)]
-mod xhci_abi_schema;
-#[allow(unused_imports, dead_code)]
-mod xhci_abi;
-#[allow(unused_imports, dead_code)]
-pub mod xhci_regs;
+pub mod mmio_space;
 #[allow(unused_imports, dead_code)]
 pub mod xhci;
 #[allow(unused_imports, dead_code)]
-pub mod mmio_space;
+mod xhci_abi;
+#[allow(unused_imports, dead_code)]
+mod xhci_abi_schema;
+#[allow(unused_imports, dead_code)]
+mod xhci_backend_device;
+#[allow(unused_imports, dead_code)]
+pub mod xhci_regs;
+#[allow(unused_imports, dead_code)]
+mod xhci_transfer;

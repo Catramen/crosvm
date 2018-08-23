@@ -22,6 +22,7 @@ net_util = { path = "../net_util" }
 p9 = { path = "../p9" }
 resources = { path = "../resources" }
 sys_util = { path = "../sys_util" }
+usb_util = { path = "../usb_util" }
 vhost = { path = "../vhost" }
 virtio_sys = { path = "../virtio_sys" }
 vm_control = { path = "../vm_control" }

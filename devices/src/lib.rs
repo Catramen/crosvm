@@ -17,6 +17,7 @@ extern crate p9;
 extern crate resources;
 #[macro_use]
 extern crate sys_util;
+extern crate usb_util;
 extern crate vhost;
 extern crate virtio_sys;
 extern crate vm_control;
