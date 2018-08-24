@@ -11,6 +11,7 @@ mod interrupter;
 mod intr_resample_handler;
 mod ring_buffer;
 mod ring_buffer_controller;
+mod transfer_ring_controller;
 #[allow(dead_code)]
 mod xhci_abi;
 #[allow(dead_code)]
