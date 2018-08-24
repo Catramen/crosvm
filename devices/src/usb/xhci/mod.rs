@@ -27,3 +27,5 @@ mod xhci_backend_device;
 pub mod xhci_regs;
 #[allow(unused_imports, dead_code)]
 mod xhci_transfer;
+#[allow(unused_imports, dead_code)]
+mod transfer_ring_controller;
