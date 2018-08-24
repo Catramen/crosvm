@@ -11,6 +11,8 @@ pub type UsbDeviceAddress = u32;
 pub trait XhciBackendDevice {
     /// Submit a xhci transfer to backend.
     fn submit_transfer(&self, transfer: XhciTransfer);
-    /// Set address of t his backend.
+    /// Set address of this backend.
     fn set_address(&self, address: UsbDeviceAddress);
+    /// Reset this device.
+    fn reset(&self) -> bool;
 }
