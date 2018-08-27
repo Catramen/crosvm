@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #[allow(unused_imports, dead_code)]
+mod device_slot;
+#[allow(unused_imports, dead_code)]
 mod event_ring;
 #[allow(unused_imports, dead_code)]
 mod ring_buffer;
@@ -16,6 +18,8 @@ mod interrupter;
 #[allow(unused_imports, dead_code)]
 pub mod mmio_space;
 #[allow(unused_imports, dead_code)]
+mod transfer_ring_controller;
+#[allow(unused_imports, dead_code)]
 pub mod xhci;
 #[allow(unused_imports, dead_code)]
 mod xhci_abi;
@@ -27,5 +31,3 @@ mod xhci_backend_device;
 pub mod xhci_regs;
 #[allow(unused_imports, dead_code)]
 mod xhci_transfer;
-#[allow(unused_imports, dead_code)]
-mod transfer_ring_controller;
