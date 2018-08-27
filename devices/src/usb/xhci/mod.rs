@@ -6,6 +6,7 @@
 mod mmio_register;
 mod mmio_space;
 
+mod device_slot;
 mod event_ring;
 mod interrupter;
 mod intr_resample_handler;
