@@ -5,6 +5,9 @@
 use super::interrupter::Interrupter;
 use std::sync::{Arc, Mutex, Weak};
 use sys_util::{EventFd, GuestAddress, GuestMemory};
+use usb::event_loop::EventLoop;
+use usb::xhci::command_ring_controller::CommandRingController;
+use usb::xhci::device_slot::{DeviceSlot, DeviceSlots};
 use usb::xhci::xhci_abi::Trb;
 use usb::xhci::xhci_regs::*;
 
@@ -13,19 +16,33 @@ pub struct Xhci {
     mem: GuestMemory,
     regs: XHCIRegs,
     interrupter: Arc<Mutex<Interrupter>>,
-    // TODO(jkwang) Add command ring and device slot.
-    // command_ring_controller: CommandRingController,
-    // device_slot: [DeviceSlot; 8],
+    command_ring_controller: Arc<CommandRingController>,
+    device_slots: DeviceSlots,
 }
 
 impl Xhci {
     /// Create a new xHCI controller.
     pub fn new(mem: GuestMemory, regs: XHCIRegs) -> Arc<Self> {
+        let (event_loop, join_handle) = EventLoop::start();
         let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), &regs)));
+        let device_slots = DeviceSlots::new(
+            regs.dcbaap.clone(),
+            interrupter.clone(),
+            event_loop.clone(),
+            mem.clone(),
+        );
+        let command_ring_controller = CommandRingController::new(
+            mem.clone(),
+            &event_loop,
+            device_slots.clone(),
+            interrupter.clone(),
+        );
         let xhci = Arc::new(Xhci {
             mem: mem.clone(),
             regs: regs,
             interrupter: interrupter,
+            command_ring_controller: command_ring_controller,
+            device_slots: device_slots,
         });
         Self::init_reg_callbacks(&xhci);
         xhci

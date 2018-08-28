@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #[allow(unused_imports, dead_code)]
+mod command_ring_controller;
+#[allow(unused_imports, dead_code)]
 mod device_slot;
 #[allow(unused_imports, dead_code)]
 mod event_ring;
