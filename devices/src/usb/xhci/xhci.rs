@@ -5,9 +5,11 @@
 use super::interrupter::Interrupter;
 use std::sync::{Arc, Mutex, Weak};
 use sys_util::{EventFd, GuestAddress, GuestMemory};
+use usb::auto_callback::AutoCallback;
 use usb::event_loop::EventLoop;
 use usb::xhci::command_ring_controller::CommandRingController;
 use usb::xhci::device_slot::{DeviceSlot, DeviceSlots};
+use usb::xhci::usb_ports::UsbPorts;
 use usb::xhci::xhci_abi::Trb;
 use usb::xhci::xhci_regs::*;
 
@@ -25,8 +27,10 @@ impl Xhci {
     pub fn new(mem: GuestMemory, regs: XHCIRegs) -> Arc<Self> {
         let (event_loop, join_handle) = EventLoop::start();
         let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), &regs)));
+        let ports = Arc::new(Mutex::new(UsbPorts::new(&regs, interrupter.clone())));
         let device_slots = DeviceSlots::new(
             regs.dcbaap.clone(),
+            ports,
             interrupter.clone(),
             event_loop.clone(),
             mem.clone(),
@@ -58,16 +62,14 @@ impl Xhci {
         });
 
         let xhci_weak0 = xhci_weak.clone();
-        xhci.regs.crcr.set_write_cb(move |val: u64| {
-            xhci_weak0.upgrade().unwrap().crcr_callback(val);
-            val
-        });
+        xhci.regs
+            .crcr
+            .set_write_cb(move |val: u64| xhci_weak0.upgrade().unwrap().crcr_callback(val));
 
         for i in 0..xhci.regs.portsc.len() {
             let xhci_weak0 = xhci_weak.clone();
             xhci.regs.portsc[i].set_write_cb(move |val: u32| {
-                xhci_weak0.upgrade().unwrap().portsc_callback(i as u32, val);
-                val
+                xhci_weak0.upgrade().unwrap().portsc_callback(i as u32, val)
             });
         }
 
@@ -128,6 +130,18 @@ impl Xhci {
 
     // Callback for usbcmd register write.
     fn usbcmd_callback(&self, value: u32) {
+        if (value & USB_CMD_RESET) > 0 {
+            self.reset();
+            return;
+        }
+
+        if (value & USB_CMD_RUNSTOP) > 0 {
+            self.regs.usbsts.clear_bits(USB_STS_HALTED);
+        } else {
+            self.halt();
+            self.regs.crcr.clear_bits(CRCR_COMMAND_RING_RUNNING);
+        }
+
         // Enable interrupter if needed.
         let enabled = (value & USB_CMD_INTERRUPTER_ENABLE) > 0
             && (self.regs.iman.get_value() & IMAN_INTERRUPT_ENABLE) > 0;
@@ -135,18 +149,57 @@ impl Xhci {
     }
 
     // Callback for crcr register write.
-    fn crcr_callback(&self, value: u64) {
-        // TODO(jkwang) Implement side effects of crcr register write.
+    fn crcr_callback(&self, value: u64) -> u64 {
+        if (self.regs.crcr.get_value() & CRCR_COMMAND_RING_RUNNING) == 0 {
+            self.command_ring_controller
+                .set_dequeue_pointer(GuestAddress(value & CRCR_COMMAND_RING_POINTER));
+            self.command_ring_controller
+                .set_consumer_cycle_state((value & CRCR_RING_CYCLE_STATE) > 0);
+            value
+        } else {
+            error!("Write to crcr while command ring is running");
+            self.regs.crcr.get_value()
+        }
     }
 
     // Callback for portsc register write.
-    fn portsc_callback(&self, index: u32, value: u32) {
-        // TODO(jkwang) Implement side effects of portsc register write.
+    fn portsc_callback(&self, index: u32, value: u32) -> u32 {
+        let mut value = value;
+        // xHCI spec 4.19.5. Note: we might want to change this logic if we support USB 3.0.
+        if (value & PORTSC_PORT_RESET) > 0 || (value & PORTSC_WARM_PORT_RESET) > 0 {
+            // Libusb onlys support blocking call to reset and "usually incurs a noticeable
+            // delay.". We are faking a reset now.
+            value &= !PORTSC_PORT_LINK_STATE_MASK;
+            value &= !PORTSC_PORT_RESET;
+            value |= PORTSC_PORT_ENABLED;
+            value |= PORTSC_PORT_RESET_CHANGE;
+            self.interrupter
+                .lock()
+                .unwrap()
+                .send_port_status_change_trb((index + 1) as u8);
+        }
+        value
     }
 
     // Callback for doorbell register write.
     fn doorbell_callback(&self, index: u32, value: u32) {
-        // TODO(jkwang) Implement side effects of doorbell register write.
+        let target: usize = (value & DOORBELL_TARGET) as usize;
+        let stream_id: u16 = (value >> DOORBELL_STREAM_ID_OFFSET) as u16;
+        if (self.regs.usbcmd.get_value() & USB_CMD_RUNSTOP) > 0 {
+            // First doorbell is for command ring.
+            if index == 0 {
+                if target != 0 || stream_id != 0 {
+                    return;
+                }
+                self.regs.crcr.set_bits(CRCR_COMMAND_RING_RUNNING);
+                self.command_ring_controller.start();
+            } else {
+                self.device_slots
+                    .slot(index as u8)
+                    .unwrap()
+                    .ring_doorbell(target, stream_id);
+            }
+        }
     }
 
     // Callback for iman register write.
@@ -191,5 +244,20 @@ impl Xhci {
             ));
             interrupter.set_event_handler_busy((value & ERDP_EVENT_HANDLER_BUSY) > 0);
         }
+    }
+
+    fn reset(&self) {
+        self.regs.usbsts.set_bits(USB_STS_CONTROLLER_NOT_READY);
+        let usbsts = self.regs.usbsts.clone();
+        self.device_slots.stop_all_and_reset(move || {
+            usbsts.clear_bits(USB_STS_CONTROLLER_NOT_READY);
+        });
+    }
+
+    fn halt(&self) {
+        let usbsts = self.regs.usbsts.clone();
+        self.device_slots.stop_all(AutoCallback::new(move || {
+            usbsts.set_bits(USB_STS_HALTED);
+        }));
     }
 }

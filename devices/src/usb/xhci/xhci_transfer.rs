@@ -8,8 +8,9 @@ use super::xhci_backend_device::XhciBackendDevice;
 use super::xhci_regs::MAX_INTERRUPTER;
 use std::cmp::min;
 use std::sync::{Arc, Mutex};
-use sys_util::EventFd;
-use usb_util::types::TransferType;
+use sys_util::{EventFd, GuestMemory};
+use usb_util::types::UsbRequestSetup;
+use super::scatter_gather_buffer::ScatterGatherBuffer;
 
 /// Status of this transfer.
 pub enum TransferStatus {
@@ -19,11 +20,66 @@ pub enum TransferStatus {
     Success,
 }
 
+/// Type of a transfer received handled by transfer ring.
+pub enum XhciTransferType {
+    // Normal means bulk transfer or interrupt transfer, depending on endpoint type.
+    // See spec 4.11.2.1.
+    Normal(ScatterGatherBuffer),
+    // See usb spec for setup stage, data stage and status stage,
+    // see xHCI spec 4.11.2.2 for corresponding trbs.
+    SetupStage(UsbRequestSetup),
+    DataStage(ScatterGatherBuffer),
+    StatusStage,
+    // See xHCI spec 4.11.2.3.
+    Isoch(ScatterGatherBuffer),
+    // See xHCI spec 6.4.1.4.
+    Noop,
+}
+
+impl XhciTransferType {
+    pub fn new(mem: GuestMemory, td: TransferDescriptor) -> XhciTransferType {
+        match td[0].trb.trb_type().unwrap() {
+            TrbType::Normal => {
+                let buffer = ScatterGatherBuffer::new(mem, td);
+                XhciTransferType::Normal(buffer)
+            },
+            TrbType::SetupStage => {
+                let trb = td[0].trb.cast::<SetupStageTrb>();
+                XhciTransferType::SetupStage(UsbRequestSetup::new(
+                        trb.get_request_type(),
+                        trb.get_request(),
+                        trb.get_value(),
+                        trb.get_index(),
+                        trb.get_length(),
+                        ))
+            },
+            TrbType::DataStage => {
+                let buffer = ScatterGatherBuffer::new(mem, td);
+                XhciTransferType::DataStage(buffer)
+            },
+            TrbType::StatusStage => {
+                XhciTransferType::StatusStage
+            },
+            TrbType::Isoch => {
+                let buffer = ScatterGatherBuffer::new(mem, td);
+                XhciTransferType::Isoch(buffer)
+            },
+            TrbType::Noop => {
+                XhciTransferType::Noop
+            },
+            _ => {
+                panic!("Wrong trb type in transfer ring");
+            }
+        }
+    }
+}
+
 /// Xhci transfer denote a transfer initiated by guest os driver. It will be submited to a
 /// XhciBackendDevice.
 pub struct XhciTransfer {
+    ty: XhciTransferType,
+    mem: GuestMemory,
     interrupter: Arc<Mutex<Interrupter>>,
-    ty: TransferType,
     slot_id: u8,
     endpoint_id: u8,
     transfer_trbs: TransferDescriptor,
@@ -33,6 +89,7 @@ pub struct XhciTransfer {
 impl XhciTransfer {
     /// Build a new XhciTransfer.
     pub fn new(
+        mem: GuestMemory,
         interrupter: Arc<Mutex<Interrupter>>,
         slot_id: u8,
         endpoint_id: u8,
@@ -40,41 +97,23 @@ impl XhciTransfer {
         completion_event: EventFd,
     ) -> Self {
         assert!(transfer_trbs.len() > 0);
-        let first_trb = transfer_trbs[0].trb;
-        // For more information about transfer types, refer to xHCI spec 3.2.9 and 3.2.10.
-        let transfer_type = match first_trb.trb_type() {
-            Some(TrbType::Normal) => {
-                if endpoint_id % 2 == 0 {
-                    TransferType::Out
-                } else {
-                    TransferType::In
-                }
-            }
-            Some(TrbType::SetupStage) => TransferType::Setup,
-            Some(TrbType::DataStage) => {
-                if first_trb.cast::<DataStageTrb>().get_direction() == 0 {
-                    TransferType::Out
-                } else {
-                    TransferType::In
-                }
-            }
-            Some(TrbType::StatusStage) => {
-                if first_trb.cast::<StatusStageTrb>().get_direction() == 0 {
-                    TransferType::Out
-                } else {
-                    TransferType::In
-                }
-            }
-            _ => panic!("Invalid trb type"),
-        };
         XhciTransfer {
+            ty: XhciTransferType::new(mem.clone(), transfer_trbs.clone()),
+            mem,
             interrupter,
             transfer_completion_event: completion_event,
-            ty: transfer_type,
             slot_id,
             endpoint_id,
             transfer_trbs,
         }
+    }
+
+    pub fn get_transfer_type(&self) -> &XhciTransferType {
+        &self.ty
+    }
+
+    pub fn get_transfer_descriptor(&self) -> &TransferDescriptor {
+        &self.transfer_trbs
     }
 
     /// This functions should be invoked when transfer is completed (or failed).

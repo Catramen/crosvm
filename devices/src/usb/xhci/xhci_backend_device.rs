@@ -13,6 +13,4 @@ pub trait XhciBackendDevice: Send + Sync {
     fn submit_transfer(&self, transfer: XhciTransfer);
     /// Set address of this backend.
     fn set_address(&self, address: UsbDeviceAddress);
-    /// Reset this device.
-    fn reset(&self) -> bool;
 }

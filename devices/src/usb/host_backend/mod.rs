@@ -3,11 +3,6 @@
 // found in the LICENSE file.
 
 #[allow(dead_code)]
-mod auto_callback;
-#[allow(dead_code)]
-mod event_loop;
-#[allow(dead_code)]
 pub mod host_backend;
-
-pub mod xhci;
-
+#[allow(dead_code)]
+pub mod host_backend_device;

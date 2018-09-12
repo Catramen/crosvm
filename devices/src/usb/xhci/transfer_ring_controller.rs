@@ -18,6 +18,7 @@ use super::xhci_transfer::XhciTransfer;
 pub type TransferRingController = RingBufferController<TransferRingTrbHandler>;
 
 pub struct TransferRingTrbHandler {
+    mem: GuestMemory,
     interrupter: Arc<Mutex<Interrupter>>,
     slot_id: u8,
     endpoint_id: u8,
@@ -31,6 +32,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
         completion_event: EventFd,
     ) {
         let xhci_transfer = XhciTransfer::new(
+            self.mem.clone(),
             self.interrupter.clone(),
             self.slot_id,
             self.endpoint_id,
@@ -51,9 +53,10 @@ impl TransferRingController {
         backend: Arc<XhciBackendDevice>,
     ) -> Arc<TransferRingController> {
         RingBufferController::create_controller(
-            mem,
+            mem.clone(),
             event_loop,
             TransferRingTrbHandler {
+                mem,
                 interrupter,
                 slot_id,
                 endpoint_id,

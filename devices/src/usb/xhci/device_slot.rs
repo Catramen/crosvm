@@ -5,6 +5,7 @@
 use super::interrupter::Interrupter;
 use super::mmio_register::Register;
 use super::transfer_ring_controller::TransferRingController;
+use super::usb_ports::UsbPorts;
 use super::xhci_abi::{
     AddressDeviceCommandTrb, AddressedTrb, ConfigureEndpointCommandTrb, DeviceContext,
     DeviceSlotState, EndpointContext, EndpointState, EvaluateContextCommandTrb,
@@ -29,12 +30,14 @@ pub const TOTAL_TRANSFER_RING_CONTROLLERS: usize = 31;
 
 #[derive(Clone)]
 pub struct DeviceSlots {
+    ports: Arc<Mutex<UsbPorts>>,
     slots: Vec<Arc<Mutex<DeviceSlot>>>,
 }
 
 impl DeviceSlots {
     pub fn new(
         dcbaap: Register<u64>,
+        ports: Arc<Mutex<UsbPorts>>,
         interrupter: Arc<Mutex<Interrupter>>,
         event_loop: EventLoop,
         mem: GuestMemory,
@@ -44,12 +47,16 @@ impl DeviceSlots {
             vec.push(Arc::new(Mutex::new(DeviceSlot::new(
                 (i + 1) as u8,
                 dcbaap.clone(),
+                ports.clone(),
                 interrupter.clone(),
                 event_loop.clone(),
                 mem.clone(),
             ))));
         }
-        DeviceSlots { slots: vec }
+        DeviceSlots {
+            ports: ports,
+            slots: vec,
+        }
     }
 
     pub fn slot(&self, slot_id: u8) -> Option<MutexGuard<DeviceSlot>> {
@@ -57,6 +64,29 @@ impl DeviceSlots {
             None
         } else {
             Some(self.slots[slot_id as usize].lock().unwrap())
+        }
+    }
+
+    pub fn ports(&self) -> &Arc<Mutex<UsbPorts>> {
+        &self.ports
+    }
+
+    pub fn stop_all_and_reset<C: Fn() + 'static + Send>(&self, callback: C) {
+        let slots = self.slots.clone();
+        let ports = self.ports.clone();
+        let auto_callback = AutoCallback::new(move || {
+            for slot in &slots {
+                slot.lock().unwrap().reset();
+                ports.lock().unwrap().reset();
+            }
+            callback();
+        });
+        self.stop_all(auto_callback);
+    }
+
+    pub fn stop_all(&self, auto_callback: AutoCallback) {
+        for slot in &self.slots {
+            slot.lock().unwrap().stop_all_trc(auto_callback.clone());
         }
     }
 
@@ -72,6 +102,7 @@ impl DeviceSlots {
 pub struct DeviceSlot {
     slot_id: u8,
     dcbaap: Register<u64>,
+    ports: Arc<Mutex<UsbPorts>>,
     interrupter: Arc<Mutex<Interrupter>>,
     event_loop: EventLoop,
     mem: GuestMemory,
@@ -84,6 +115,7 @@ impl DeviceSlot {
     pub fn new(
         slot_id: u8,
         dcbaap: Register<u64>,
+        ports: Arc<Mutex<UsbPorts>>,
         interrupter: Arc<Mutex<Interrupter>>,
         event_loop: EventLoop,
         mem: GuestMemory,
@@ -95,6 +127,7 @@ impl DeviceSlot {
         DeviceSlot {
             slot_id,
             dcbaap,
+            ports,
             interrupter,
             event_loop,
             mem,
@@ -192,12 +225,9 @@ impl DeviceSlot {
             event_fd.write(1).unwrap();
         }
     }
-    pub fn set_backend(&mut self, backend: Arc<XhciBackendDevice>) {
-        self.backend = Some(backend);
-    }
 
     // Assigns the device address and initializes slot and endpoint 0 context.
-    pub fn set_address(&self, trb: &AddressDeviceCommandTrb) -> TrbCompletionCode {
+    pub fn set_address(&mut self, trb: &AddressDeviceCommandTrb) -> TrbCompletionCode {
         if !self.enabled {
             return TrbCompletionCode::SlotNotEnabledError;
         }
@@ -215,6 +245,11 @@ impl DeviceSlot {
         self.copy_context(input_context_ptr, 0);
         self.copy_context(input_context_ptr, 1);
 
+        self.backend = self
+            .ports
+            .lock()
+            .unwrap()
+            .get_backend_for_port(device_context.slot_context.get_root_hub_port_number());
         // Assign slot ID as device address if block_set_address_request is not set.
         if trb.get_block_set_address_request() > 0 {
             device_context
