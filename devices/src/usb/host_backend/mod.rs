@@ -5,4 +5,6 @@
 #[allow(dead_code)]
 pub mod host_backend;
 #[allow(dead_code)]
-pub mod host_backend_device;
+pub mod host_device;
+#[allow(dead_code)]
+pub mod usb_endpoint;

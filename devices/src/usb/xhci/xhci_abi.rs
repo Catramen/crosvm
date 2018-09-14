@@ -49,20 +49,103 @@ unsafe impl TrbCast for ResetDeviceCommandTrb {}
 unsafe impl TrbCast for TransferEventTrb {}
 unsafe impl TrbCast for CommandCompletionEventTrb {}
 unsafe impl TrbCast for PortStatusChangeEventTrb {}
-unsafe impl TrbCast for EventRingSegmentTableEntry {}
-unsafe impl TrbCast for InputControlContext {}
-unsafe impl TrbCast for SlotContext {}
-unsafe impl TrbCast for EndpointContext {}
+
+/// Associate real type of trb.
+pub trait TypedTrb {
+    const TY: TrbType;
+}
+
+impl TypedTrb for Trb {
+    const TY: TrbType = TrbType::Reserved;
+}
+
+impl TypedTrb for NormalTrb {
+    const TY: TrbType = TrbType::Normal;
+}
+
+impl TypedTrb for SetupStageTrb {
+    const TY: TrbType = TrbType::SetupStage;
+}
+
+impl TypedTrb for DataStageTrb {
+    const TY: TrbType = TrbType::DataStage;
+}
+
+impl TypedTrb for StatusStageTrb {
+    const TY: TrbType = TrbType::StatusStage;
+}
+
+impl TypedTrb for IsochTrb {
+    const TY: TrbType = TrbType::Isoch;
+}
+
+impl TypedTrb for LinkTrb {
+    const TY: TrbType = TrbType::Link;
+}
+
+impl TypedTrb for EventDataTrb {
+    const TY: TrbType = TrbType::EventData;
+}
+
+impl TypedTrb for NoopTrb {
+    const TY: TrbType = TrbType::Noop;
+}
+
+impl TypedTrb for DisableSlotCommandTrb {
+    const TY: TrbType = TrbType::DisableSlotCommand;
+}
+
+impl TypedTrb for AddressDeviceCommandTrb {
+    const TY: TrbType = TrbType::AddressDeviceCommand;
+}
+
+impl TypedTrb for ConfigureEndpointCommandTrb {
+    const TY: TrbType = TrbType::ConfigureEndpointCommand;
+}
+
+impl TypedTrb for EvaluateContextCommandTrb {
+    const TY: TrbType = TrbType::EvaluateContextCommand;
+}
+
+impl TypedTrb for ResetDeviceCommandTrb {
+    const TY: TrbType = TrbType::ResetDeviceCommand;
+}
+
+impl TypedTrb for TransferEventTrb {
+    const TY: TrbType = TrbType::TransferEvent;
+}
+
+impl TypedTrb for CommandCompletionEventTrb {
+    const TY: TrbType = TrbType::CommandCompletionEvent;
+}
+
+impl TypedTrb for PortStatusChangeEventTrb {
+    const TY: TrbType = TrbType::PortStatusChangeEvent;
+}
 
 /// All trb structs have the same size. One trb could be safely casted to another, though the
 /// values might be invalid.
-pub unsafe trait TrbCast: DataInit {
-    fn cast<T: DataInit + TrbCast>(&self) -> &T {
+pub unsafe trait TrbCast: DataInit + TypedTrb {
+    fn cast<T:TrbCast>(&self) -> &T {
         T::from_slice(self.as_slice()).unwrap()
     }
 
-    fn cast_mut<T: DataInit + TrbCast>(&mut self) -> &mut T {
+    fn cast_mut<T:TrbCast>(&mut self) -> &mut T {
         T::from_mut_slice(self.as_mut_slice()).unwrap()
+    }
+
+    fn checked_cast<T: TrbCast>(&self) -> Option<&T> {
+        if Trb::from_slice(self.as_slice()).unwrap().trb_type().unwrap() != T::TY {
+            return None;
+        }
+        Some(T::from_slice(self.as_slice()).unwrap())
+    }
+
+    fn checked_mut_cast<T: TrbCast>(&mut self) -> Option<&mut T> {
+        if Trb::from_slice(self.as_slice()).unwrap().trb_type().unwrap() != T::TY {
+            return None;
+        }
+        Some(T::from_mut_slice(self.as_mut_slice()).unwrap())
     }
 }
 

@@ -43,7 +43,6 @@ impl ScatterGatherBuffer {
         let mut total_size = 0usize;
         let mut remaining_buffer: &mut [u8] = buffer;
         let mut cur_buffer: &mut [u8] = &mut [];
-        let mut done = false;
         for atrb in &self.td {
             let normal_trb = atrb.trb.cast::<NormalTrb>();
             let len = normal_trb.get_trb_transfer_length() as usize;
@@ -69,7 +68,6 @@ impl ScatterGatherBuffer {
         let mut total_size = 0usize;
         let mut remaining_buffer: &[u8] = buffer;
         let mut cur_buffer: &[u8] = &[];
-        let mut done = false;
         for atrb in &self.td {
             let normal_trb = atrb.trb.cast::<NormalTrb>();
             let len = normal_trb.get_trb_transfer_length() as usize;

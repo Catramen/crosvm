@@ -20,6 +20,14 @@ pub enum TransferStatus {
     Success,
 }
 
+/// Type of usb endpoints.
+#[derive(PartialEq)]
+pub enum EndpointDirection {
+    In,
+    Out,
+    Control,
+}
+
 /// Type of a transfer received handled by transfer ring.
 pub enum XhciTransferType {
     // Normal means bulk transfer or interrupt transfer, depending on endpoint type.
@@ -81,13 +89,15 @@ pub struct XhciTransfer {
     mem: GuestMemory,
     interrupter: Arc<Mutex<Interrupter>>,
     slot_id: u8,
+    // id of endpoint in device slot.
     endpoint_id: u8,
+    endpoint_dir: EndpointDirection,
     transfer_trbs: TransferDescriptor,
     transfer_completion_event: EventFd,
 }
 
 impl XhciTransfer {
-    /// Build a new XhciTransfer.
+    /// Build a new XhciTransfer. Endpoint id is the id in xHCI device slot.
     pub fn new(
         mem: GuestMemory,
         interrupter: Arc<Mutex<Interrupter>>,
@@ -97,6 +107,15 @@ impl XhciTransfer {
         completion_event: EventFd,
     ) -> Self {
         assert!(transfer_trbs.len() > 0);
+        let endpoint_dir = {
+            if endpoint_id == 0 {
+                EndpointDirection::Control
+            } else if (endpoint_id % 2) == 0 {
+                EndpointDirection::Out
+            } else {
+                EndpointDirection::In
+            }
+        };
         XhciTransfer {
             ty: XhciTransferType::new(mem.clone(), transfer_trbs.clone()),
             mem,
@@ -104,6 +123,7 @@ impl XhciTransfer {
             transfer_completion_event: completion_event,
             slot_id,
             endpoint_id,
+            endpoint_dir,
             transfer_trbs,
         }
     }
@@ -112,8 +132,16 @@ impl XhciTransfer {
         &self.ty
     }
 
-    pub fn get_transfer_descriptor(&self) -> &TransferDescriptor {
-        &self.transfer_trbs
+    pub fn get_endpoint_number(&self) -> u8 {
+        self.endpoint_id / 2
+    }
+
+    pub fn get_endpoint_dir(&self) -> &EndpointDirection {
+        &self.endpoint_dir
+    }
+
+    pub fn get_first_trb_as<T: TrbCast>(&self) -> Option<&T> {
+        self.transfer_trbs[0].trb.checked_cast::<T>()
     }
 
     /// This functions should be invoked when transfer is completed (or failed).

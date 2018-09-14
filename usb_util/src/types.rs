@@ -46,6 +46,7 @@ pub const DATA_PHASE_DIRECTION_OFFSET: u8 = 7;
 /// Bit mask of data phase transfer direction.
 pub const DATA_PHASE_DIRECTION: u8 = 1u8 << DATA_PHASE_DIRECTION_OFFSET;
 // Types of data phase transfer directions.
+#[derive(PartialEq)]
 pub enum ControlRequestDataPhaseTransferDirection {
     HostToDevice = 0,
     DeviceToHost = 1,

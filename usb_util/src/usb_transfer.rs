@@ -52,8 +52,8 @@ const CONTROL_DATA_BUFFER_SIZE: usize = 1024;
 /// Buffer type for control transfer. The first 8-bytes is a UsbRequestSetup struct.
 #[repr(C, packed)]
 pub struct ControlTransferBuffer {
-    setup_buffer: UsbRequestSetup,
-    data_buffer: [u8; CONTROL_DATA_BUFFER_SIZE],
+    pub setup_buffer: UsbRequestSetup,
+    pub data_buffer: [u8; CONTROL_DATA_BUFFER_SIZE],
 }
 
 impl Default for ControlTransferBuffer {
@@ -71,19 +71,15 @@ impl Default for ControlTransferBuffer {
     }
 }
 
-impl ControlTransferBuffer {
-    /// Returns a mutable reference of setup_buffer.
-    pub fn request_setup(&mut self) -> &mut UsbRequestSetup {
-        &mut (self.setup_buffer)
-    }
-}
-
 impl UsbTransferBuffer for ControlTransferBuffer {
     fn as_raw_ptr(&mut self) -> *mut u8 {
         self as *mut ControlTransferBuffer as *mut u8
     }
 
     fn length(&self) -> i32 {
+        if self.setup_buffer.length as usize > CONTROL_BUFFER_SIZE {
+            panic!("Setup packet has an oversize length");
+        }
         self.setup_buffer.length as i32
     }
 }
@@ -128,6 +124,8 @@ struct UsbTransferInner<T: UsbTransferBuffer> {
     callback: Option<Box<UsbTransferCompletionCallback<T>>>,
     buffer: T,
 }
+
+unsafe impl<T: UsbTransferBuffer> Send for UsbTransferInner<T> {}
 
 impl<T: UsbTransferBuffer> Drop for UsbTransferInner<T> {
     fn drop(&mut self) {
@@ -181,6 +179,24 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
     /// Get a reference to the buffer.
     pub fn buffer(&mut self) -> &mut T {
         &mut self.inner.buffer
+    }
+
+    /// Get actual length of data that was transferred.
+    pub fn actual_length(&self) -> i32 {
+        let transfer = self.inner.transfer;
+        // Safe because inner.transfer is valid memory.
+        unsafe {
+            (*transfer).actual_length
+        }
+    }
+
+    /// Get the transfer status of this transfer.
+    pub fn status(&self) -> TransferStatus {
+        let transfer = self.inner.transfer;
+        // Safe because inner.transfer is valid memory.
+        unsafe {
+            TransferStatus::from((*transfer).status)
+        }
     }
 
     /// Submit this transfer to device handle. 'self' is consumed. On success, the memory will be
