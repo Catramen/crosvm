@@ -22,7 +22,7 @@ pub struct TransferRingTrbHandler {
     interrupter: Arc<Mutex<Interrupter>>,
     slot_id: u8,
     endpoint_id: u8,
-    backend: Arc<XhciBackendDevice>,
+    backend: Arc<Mutex<XhciBackendDevice>>,
 }
 
 impl TransferDescriptorHandler for TransferRingTrbHandler {
@@ -39,7 +39,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
             descriptor,
             completion_event,
         );
-        xhci_transfer.send_to_backend_if_valid(&*self.backend);
+        xhci_transfer.send_to_backend_if_valid(&mut *self.backend.lock().unwrap());
     }
 }
 
@@ -50,7 +50,7 @@ impl TransferRingController {
         interrupter: Arc<Mutex<Interrupter>>,
         slot_id: u8,
         endpoint_id: u8,
-        backend: Arc<XhciBackendDevice>,
+        backend: Arc<Mutex<XhciBackendDevice>>,
     ) -> Arc<TransferRingController> {
         RingBufferController::create_controller(
             mem.clone(),

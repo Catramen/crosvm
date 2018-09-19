@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 pub struct UsbPorts {
     portsc: Vec<Register<u32>>,
     usbsts: Register<u32>,
-    devices: Vec<Option<Arc<XhciBackendDevice>>>,
+    devices: Vec<Option<Arc<Mutex<XhciBackendDevice>>>>,
     interrupter: Arc<Mutex<Interrupter>>,
 }
 
@@ -42,14 +42,14 @@ impl UsbPorts {
         }
     }
 
-    pub fn get_backend_for_port(&self, port_id: u8) -> Option<Arc<XhciBackendDevice>> {
+    pub fn get_backend_for_port(&self, port_id: u8) -> Option<Arc<Mutex<XhciBackendDevice>>> {
         if port_id == 0 || port_id > MAX_PORTS {
             return None;
         }
         self.devices[(port_id - 1) as usize].clone()
     }
 
-    pub fn connect_backend(&mut self, backend: Arc<XhciBackendDevice>) -> Option<u8> {
+    pub fn connect_backend(&mut self, backend: Arc<Mutex<XhciBackendDevice>>) -> Option<u8> {
         for i in 0..self.devices.len() {
             if self.devices[i].is_none() {
                 let port_id = (i + 1) as u8;

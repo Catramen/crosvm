@@ -35,4 +35,4 @@ pub mod xhci_backend_device;
 pub mod xhci_regs;
 #[allow(unused_imports, dead_code)]
 pub mod xhci_transfer;
-mod scatter_gather_buffer;
+pub mod scatter_gather_buffer;

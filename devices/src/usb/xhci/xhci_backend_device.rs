@@ -8,9 +8,9 @@ use super::xhci_transfer::XhciTransfer;
 pub type UsbDeviceAddress = u32;
 
 /// Xhci backend device is a virtual device connected to xHCI controller. It handles xhci transfers.
-pub trait XhciBackendDevice: Send + Sync {
+pub trait XhciBackendDevice: Send {
     /// Submit a xhci transfer to backend.
-    fn submit_transfer(&self, transfer: XhciTransfer);
+    fn submit_transfer(&mut self, transfer: XhciTransfer);
     /// Set address of this backend.
-    fn set_address(&self, address: UsbDeviceAddress);
+    fn set_address(&mut self, address: UsbDeviceAddress);
 }

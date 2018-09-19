@@ -107,7 +107,7 @@ pub struct DeviceSlot {
     event_loop: EventLoop,
     mem: GuestMemory,
     enabled: bool,
-    backend: Option<Arc<XhciBackendDevice>>,
+    backend: Option<Arc<Mutex<XhciBackendDevice>>>,
     transfer_ring_controllers: Vec<Option<Arc<TransferRingController>>>,
 }
 
@@ -259,6 +259,8 @@ impl DeviceSlot {
             if self.backend.is_some() {
                 self.backend
                     .as_ref()
+                    .unwrap()
+                    .lock()
                     .unwrap()
                     .set_address(self.slot_id as u32);
             } else {

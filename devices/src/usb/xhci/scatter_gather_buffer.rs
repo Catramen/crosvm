@@ -41,22 +41,23 @@ impl ScatterGatherBuffer {
     /// Read content to buffer, return read size.
     pub fn read(&self, buffer: &mut [u8]) -> usize {
         let mut total_size = 0usize;
-        let mut remaining_buffer: &mut [u8] = buffer;
-        let mut cur_buffer: &mut [u8] = &mut [];
+        let mut offset = 0;
         for atrb in &self.td {
             let normal_trb = atrb.trb.cast::<NormalTrb>();
             let len = normal_trb.get_trb_transfer_length() as usize;
             let buffer_len = {
-                if remaining_buffer.len() == 0 {
+                if offset == buffer.len() {
                     return total_size;
                 }
-                if remaining_buffer.len() > len {
+                if buffer.len() > offset + len {
                     len
                 } else {
-                    remaining_buffer.len()
+                    buffer.len() - offset
                 }
             };
-            let (cur_buffer, remaining_buffer) = remaining_buffer.split_at_mut(buffer_len);
+            let buffer_end = offset + buffer_len;
+            let cur_buffer = &mut buffer[offset..buffer_end];
+            offset = buffer_end;
             total_size += self.mem.read_slice_at_addr(cur_buffer,
                                                       GuestAddress(normal_trb.get_data_buffer())).unwrap();
         }
@@ -66,25 +67,82 @@ impl ScatterGatherBuffer {
     /// Write content from buffer, return write size.
     pub fn write(&self, buffer: &[u8]) -> usize {
         let mut total_size = 0usize;
-        let mut remaining_buffer: &[u8] = buffer;
-        let mut cur_buffer: &[u8] = &[];
+        let mut offset = 0;
         for atrb in &self.td {
             let normal_trb = atrb.trb.cast::<NormalTrb>();
             let len = normal_trb.get_trb_transfer_length() as usize;
             let buffer_len = {
-                if remaining_buffer.len() == 0 {
+                if offset == buffer.len() {
                     return total_size;
                 }
-                if remaining_buffer.len() > len {
+                if buffer.len() > offset + len {
                     len
                 } else {
-                    remaining_buffer.len()
+                    buffer.len() - offset
                 }
             };
-            let (cur_buffer, remaining_buffer) = remaining_buffer.split_at(buffer_len);
+            let buffer_end = offset + buffer_len;
+            let cur_buffer = &buffer[offset..buffer_end];
+            offset = buffer_end;
             total_size += self.mem.write_slice_at_addr(cur_buffer,
                                                       GuestAddress(normal_trb.get_data_buffer())).unwrap();
         }
         total_size
    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use usb::xhci::xhci_abi::{Trb, AddressedTrb};
+
+    #[test]
+    fn scatter_gather_buffer_test() {
+        let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x1000)]).unwrap();
+        let mut td = TransferDescriptor::new();
+        // In this td, we are going to have scatter buffer at 0x100, length 4, 0x200 length 2 and
+        // 0x300 length 1.
+        let mut trb = Trb::new();
+        {
+            let ntrb = trb.cast_mut::<NormalTrb>();
+            ntrb.set_trb_type(TrbType::Normal as u8);
+            ntrb.set_data_buffer(0x100);
+            ntrb.set_trb_transfer_length(4);
+        }
+        td.push(AddressedTrb{trb:trb, gpa: 0});
+        let mut trb = Trb::new();
+        {
+            let ntrb = trb.cast_mut::<NormalTrb>();
+            ntrb.set_trb_type(TrbType::Normal as u8);
+            ntrb.set_data_buffer(0x200);
+            ntrb.set_trb_transfer_length(2);
+        }
+        td.push(AddressedTrb{trb:trb, gpa: 0});
+        let mut trb = Trb::new();
+        {
+            let ntrb = trb.cast_mut::<NormalTrb>();
+            ntrb.set_trb_type(TrbType::Normal as u8);
+            ntrb.set_data_buffer(0x300);
+            ntrb.set_trb_transfer_length(1);
+        }
+        td.push(AddressedTrb{trb:trb, gpa: 0});
+
+        let buffer = ScatterGatherBuffer::new(gm.clone(), td);
+
+        assert_eq!(buffer.len(), 7);
+        let data_to_write: [u8; 7] = [7, 6, 5, 4, 3, 2, 1];
+        buffer.write(&data_to_write);
+
+        let mut d = [0; 4];
+        gm.read_slice_at_addr(&mut d, GuestAddress(0x100));
+        assert_eq!(d, [7,6,5,4]);;
+        gm.read_slice_at_addr(&mut d, GuestAddress(0x200));
+        assert_eq!(d, [3,2,0,0]);;
+        gm.read_slice_at_addr(&mut d, GuestAddress(0x300));
+        assert_eq!(d, [1,0,0,0]);;
+
+        let mut data_read = [0; 7];
+        buffer.read(&mut data_read);
+        assert_eq!(data_to_write, data_read);
+    }
 }

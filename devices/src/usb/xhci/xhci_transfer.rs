@@ -10,18 +10,11 @@ use std::cmp::min;
 use std::sync::{Arc, Mutex};
 use sys_util::{EventFd, GuestMemory};
 use usb_util::types::UsbRequestSetup;
+use usb_util::usb_transfer::TransferStatus;
 use super::scatter_gather_buffer::ScatterGatherBuffer;
 
-/// Status of this transfer.
-pub enum TransferStatus {
-    // The transfer completed with error.
-    Error,
-    // The transfer completed successfuly.
-    Success,
-}
-
 /// Type of usb endpoints.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum EndpointDirection {
     In,
     Out,
@@ -85,7 +78,6 @@ impl XhciTransferType {
 /// Xhci transfer denote a transfer initiated by guest os driver. It will be submited to a
 /// XhciBackendDevice.
 pub struct XhciTransfer {
-    ty: XhciTransferType,
     mem: GuestMemory,
     interrupter: Arc<Mutex<Interrupter>>,
     slot_id: u8,
@@ -117,7 +109,6 @@ impl XhciTransfer {
             }
         };
         XhciTransfer {
-            ty: XhciTransferType::new(mem.clone(), transfer_trbs.clone()),
             mem,
             interrupter,
             transfer_completion_event: completion_event,
@@ -128,16 +119,16 @@ impl XhciTransfer {
         }
     }
 
-    pub fn get_transfer_type(&self) -> &XhciTransferType {
-        &self.ty
+    pub fn get_transfer_type(&self) -> XhciTransferType {
+        XhciTransferType::new(self.mem.clone(), self.transfer_trbs.clone())
     }
 
     pub fn get_endpoint_number(&self) -> u8 {
         self.endpoint_id / 2
     }
 
-    pub fn get_endpoint_dir(&self) -> &EndpointDirection {
-        &self.endpoint_dir
+    pub fn get_endpoint_dir(&self) -> EndpointDirection {
+        self.endpoint_dir
     }
 
     pub fn get_first_trb_as<T: TrbCast>(&self) -> Option<&T> {
@@ -148,8 +139,9 @@ impl XhciTransfer {
     pub fn on_transfer_complete(&self, status: TransferStatus, bytes_transferred: u32) {
         self.transfer_completion_event.write(1);
         let mut edtla: u32 = 0;
+        // TODO(jkwang) Send event based on Status.
         // As noted in xHCI spec 4.11.3.1
-        // Transfer Event Trb only occur under the following conditions:
+        // Transfer Event Trb only occurs under the following conditions:
         //   1. If the Interrupt On Completion flag is set.
         //   2. When a short tansfer occurs during the execution of a Transfer TRB and the
         //      Interrupter-on-Short Packet flag is set.
@@ -189,7 +181,7 @@ impl XhciTransfer {
         }
     }
 
-    pub fn send_to_backend_if_valid(self, backend: &XhciBackendDevice) {
+    pub fn send_to_backend_if_valid(self, backend: &mut XhciBackendDevice) {
         if self.validate_transfer() {
             // Backend should invoke on transfer complete when transfer is completed.
             backend.submit_transfer(self);
