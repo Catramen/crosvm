@@ -41,7 +41,7 @@ impl From<libusb_transfer_status> for TransferStatus {
 }
 
 /// Trait for usb transfer buffer.
-pub trait UsbTransferBuffer: Default + Send {
+pub trait UsbTransferBuffer: Send {
     fn as_raw_ptr(&mut self) -> *mut u8;
     fn length(&self) -> i32;
 }
@@ -56,8 +56,8 @@ pub struct ControlTransferBuffer {
     pub data_buffer: [u8; CONTROL_DATA_BUFFER_SIZE],
 }
 
-impl Default for ControlTransferBuffer {
-    fn default() -> ControlTransferBuffer {
+impl ControlTransferBuffer {
+    fn new() -> ControlTransferBuffer {
         ControlTransferBuffer {
             setup_buffer: UsbRequestSetup {
                 request_type: 0,
@@ -77,32 +77,32 @@ impl UsbTransferBuffer for ControlTransferBuffer {
     }
 
     fn length(&self) -> i32 {
-        if self.setup_buffer.length as usize > CONTROL_BUFFER_SIZE {
+        if self.setup_buffer.length as usize > CONTROL_DATA_BUFFER_SIZE {
             panic!("Setup packet has an oversize length");
         }
         self.setup_buffer.length as i32
     }
 }
 
-// TODO(jkwang) investigate and optimize bulk buffer size to save memory allocation.
-/// Default buffer size for control data transfer.
-const CONTROL_BUFFER_SIZE: usize = 1024;
-
 /// Buffer type for Bulk transfer.
 pub struct BulkTransferBuffer {
     buffer: Vec<u8>,
 }
 
-impl Default for BulkTransferBuffer {
-    fn default() -> Self {
+impl BulkTransferBuffer {
+    fn new(buffer_size: usize) -> Self {
         BulkTransferBuffer {
-            buffer: vec![0; CONTROL_BUFFER_SIZE],
+            buffer: vec![0; buffer_size],
         }
     }
-}
 
-impl BulkTransferBuffer {
-    fn vec(&self) -> &Vec<u8> {
+    /// Get mutable interal slice of this buffer.
+    pub fn mut_slice(&mut self) -> &mut [u8] {
+        &mut self.buffer
+    }
+
+    /// Get interal slice of this buffer.
+    pub fn slice(&self) -> &[u8] {
         &self.buffer
     }
 }
@@ -143,16 +143,23 @@ pub struct UsbTransfer<T: UsbTransferBuffer> {
 
 /// Build a control transfer.
 pub fn control_transfer(timeout: u32) -> UsbTransfer<ControlTransferBuffer> {
-    UsbTransfer::<ControlTransferBuffer>::new(0, LIBUSB_TRANSFER_TYPE_CONTROL as u8, timeout)
+    UsbTransfer::<ControlTransferBuffer>::new(0,
+                                              LIBUSB_TRANSFER_TYPE_CONTROL as u8,
+                                              timeout,
+                                              ControlTransferBuffer::new())
 }
 
 /// Build a data transfer.
-pub fn bulk_transfer(endpoint: u8, timeout: u32) -> UsbTransfer<BulkTransferBuffer> {
-    UsbTransfer::<BulkTransferBuffer>::new(endpoint, LIBUSB_TRANSFER_TYPE_BULK as u8, timeout)
+pub fn bulk_transfer(endpoint: u8, timeout: u32, size: usize) -> UsbTransfer<BulkTransferBuffer> {
+    UsbTransfer::<BulkTransferBuffer>::new(
+        endpoint,
+        LIBUSB_TRANSFER_TYPE_BULK as u8,
+        timeout,
+        BulkTransferBuffer::new(size))
 }
 
 impl<T: UsbTransferBuffer> UsbTransfer<T> {
-    fn new(endpoint: u8, type_: u8, timeout: u32) -> Self {
+    fn new(endpoint: u8, type_: u8, timeout: u32, buffer: T) -> Self {
         // Safe because alloc is safe.
         let transfer: *mut libusb_transfer = unsafe { libusb_alloc_transfer(0) };
         // Just panic on OOM.
@@ -160,7 +167,7 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
         let inner = Box::new(UsbTransferInner::<T> {
             transfer: transfer,
             callback: None,
-            buffer: Default::default(),
+            buffer,
         });
         // Safe because we inited transfer.
         let raw_transfer: &mut libusb_transfer = unsafe { &mut *(inner.transfer) };
@@ -177,7 +184,12 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
     }
 
     /// Get a reference to the buffer.
-    pub fn buffer(&mut self) -> &mut T {
+    pub fn buffer(&self) -> &T {
+        &self.inner.buffer
+    }
+
+    /// Get a mutable reference to the buffer.
+    pub fn mut_buffer(&mut self) -> &mut T {
         &mut self.inner.buffer
     }
 
@@ -230,8 +242,8 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
         let transfer: *mut libusb_transfer = self.inner.transfer;
         // Safe because transfer is valid.
         unsafe {
-            (*transfer).buffer = self.buffer().as_raw_ptr();
-            (*transfer).length = self.buffer().length();
+            (*transfer).buffer = self.mut_buffer().as_raw_ptr();
+            (*transfer).length = self.mut_buffer().length();
             (*transfer).user_data = Box::into_raw(self.inner) as *mut c_void;
         }
         transfer

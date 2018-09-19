@@ -25,26 +25,26 @@ pub struct HostDevice {
     // Endpoints only contains data endpoints (1 to 30). Control transfers are handled at device
     // level.
     endpoints: Vec<UsbEndpoint>,
-    device_handle: Arc<Mutex<DeviceHandle>>,
-    ctl_ep_state: Mutex<ControlEndpointState>,
+    device_handle: DeviceHandle,
+    ctl_ep_state: ControlEndpointState,
     control_transfer: Arc<Mutex<Option<UsbTransfer<ControlTransferBuffer>>>>,
     claimed_interface: Vec<i32>,
     host_claimed_interface: Vec<i32>,
 }
 
 impl HostDevice {
-    pub fn new(handle: Arc<Mutex<DeviceHandle>>) -> HostDevice {
+    pub fn new(handle: DeviceHandle) -> HostDevice {
         HostDevice {
             endpoints: vec![],
             device_handle: handle,
-            ctl_ep_state: Mutex::new(ControlEndpointState::StatusStage),
+            ctl_ep_state: ControlEndpointState::StatusStage,
             control_transfer: Arc::new(Mutex::new(Some(control_transfer(0)))),
             claimed_interface: vec![],
             host_claimed_interface: vec![],
         }
     }
 
-    fn handle_control_transfer(&self, transfer: XhciTransfer) {
+    fn handle_control_transfer(&mut self, transfer: XhciTransfer) {
         if self.control_transfer.lock().unwrap().is_none() {
             // Yes, we can cache and handle transfers later. But it's easier to not submit transfer
             // before last transfer is handled.
@@ -52,7 +52,7 @@ impl HostDevice {
         }
         match transfer.get_transfer_type() {
             XhciTransferType::SetupStage(setup) => {
-                if (*self.ctl_ep_state.lock().unwrap()) != ControlEndpointState::StatusStage {
+                if self.ctl_ep_state != ControlEndpointState::StatusStage {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                 }
@@ -73,14 +73,14 @@ impl HostDevice {
                             (*myct.lock().unwrap()) = Some(t);
                             transfer.on_transfer_complete(status, actual_length as u32);
                         });
-                        self.device_handle.lock().unwrap().submit_async_transfer(control_transfer);
+                        self.device_handle.submit_async_transfer(control_transfer);
                 } else {
                     transfer.on_transfer_complete(TransferStatus::Completed, 0);
                 }
-                *self.ctl_ep_state.lock().unwrap() = ControlEndpointState::SetupStage;
+                self.ctl_ep_state = ControlEndpointState::SetupStage;
             },
             XhciTransferType::DataStage(buffer) => {
-                 if (*self.ctl_ep_state.lock().unwrap()) != ControlEndpointState::SetupStage {
+                 if self.ctl_ep_state != ControlEndpointState::SetupStage {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                  }
@@ -104,16 +104,16 @@ impl HostDevice {
                          _ => error!("Unknown transfer direction!"),
                  }
 
-                 *self.ctl_ep_state.lock().unwrap() = ControlEndpointState::DataStage;
+                 self.ctl_ep_state = ControlEndpointState::DataStage;
 
             },
             XhciTransferType::StatusStage => {
-                if (*self.ctl_ep_state.lock().unwrap()) == ControlEndpointState::StatusStage {
+                if self.ctl_ep_state == ControlEndpointState::StatusStage {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                 }
-                let mut locked = self.control_transfer.lock().unwrap();
                 let request_setup = {
+                    let mut locked = self.control_transfer.lock().unwrap();
                     let control_transfer = locked.as_mut().unwrap();
                     let mut tbuffer = control_transfer.buffer();
                     tbuffer.setup_buffer.clone()
@@ -126,6 +126,7 @@ impl HostDevice {
                             transfer.on_transfer_complete(s.unwrap(), 0);
                             return;
                         }
+                        let mut locked = self.control_transfer.lock().unwrap();
                         let mut control_transfer = locked.take().unwrap();
                         let myct = self.control_transfer.clone();
                         control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
@@ -134,7 +135,7 @@ impl HostDevice {
                             (*myct.lock().unwrap()) = Some(t);
                             transfer.on_transfer_complete(status, 0);
                         });
-                        self.device_handle.lock().unwrap().submit_async_transfer(control_transfer);
+                        self.device_handle.submit_async_transfer(control_transfer);
 
                     },
                     Some(ControlRequestDataPhaseTransferDirection::DeviceToHost) => {
@@ -143,7 +144,7 @@ impl HostDevice {
                     _ => error!("Unknown transfer direction!"),
                 }
 
-                *self.ctl_ep_state.lock().unwrap() = ControlEndpointState::StatusStage;
+                self.ctl_ep_state = ControlEndpointState::StatusStage;
             },
             _ => {
                 panic!("Non control transfer sent to control endpoint");
@@ -151,7 +152,7 @@ impl HostDevice {
         }
     }
 
-    fn handle_standard_control_requested(&self, request_setup: &UsbRequestSetup)
+    fn handle_standard_control_requested(&mut self, request_setup: &UsbRequestSetup)
         -> Option<TransferStatus> {
         let s = self.set_address_if_requested(request_setup);
         if s.is_some() {
@@ -183,7 +184,7 @@ impl HostDevice {
         Some(TransferStatus::Completed)
     }
 
-    fn set_config_if_requested(&self, request_setup: &UsbRequestSetup) -> Option<TransferStatus> {
+    fn set_config_if_requested(&mut self, request_setup: &UsbRequestSetup) -> Option<TransferStatus> {
         if request_setup.get_type().unwrap() != ControlRequestType::Standard ||
             request_setup.get_recipient() != ControlRequestRecipient::Device ||
                 request_setup.get_standard_request().unwrap() != StandardControlRequest::SetConfiguration {
@@ -193,10 +194,10 @@ impl HostDevice {
         let config = (request_setup.value & 0xff) as i32;
         debug!("Set config control transfer is received with config: {}", config);
         self.release_interfaces();
-        let cur_config = self.device_handle.lock().unwrap().get_active_configuration().unwrap();
+        let cur_config = self.device_handle.get_active_configuration().unwrap();
         debug!("Cur config is: {}", cur_config);
         if config != cur_config {
-            self.device_handle.lock().unwrap().set_active_configuration(config).unwrap();
+            self.device_handle.set_active_configuration(config).unwrap();
         }
         self.claim_interfaces();
         self.create_endpoints();
@@ -210,6 +211,10 @@ impl HostDevice {
                     return None;
         }
         // It's a standard, set_interface, interface request.
+        let interface = request_setup.index;
+        let alt_setting = request_setup.value;
+        self.device_handle.set_interface_alt_setting(interface as i32, alt_setting as i32).unwrap();
+        self.create_endpoints();
         Some(TransferStatus::Completed)
     }
 
@@ -220,11 +225,17 @@ impl HostDevice {
                     return None;
                 }
         // It's a standard, clear_feature, endpoint request.
-
+        const STD_FEATURE_ENDPOINT_HALT: u16 = 0;
+        if request_setup.value == STD_FEATURE_ENDPOINT_HALT {
+            self.device_handle.clear_halt(request_setup.index as u8);
+        }
         Some(TransferStatus::Completed)
     }
 
     fn release_interfaces(&self) {
+        for i in &self.claimed_interface {
+            self.device_handle.release_interface(*i).unwrap();
+        }
 
     }
 
@@ -240,7 +251,7 @@ impl HostDevice {
 }
 
 impl XhciBackendDevice for HostDevice {
-    fn submit_transfer(&self, transfer: XhciTransfer) {
+    fn submit_transfer(&mut self, transfer: XhciTransfer) {
         if transfer.get_endpoint_number() == 0 {
             self.handle_control_transfer(transfer);
             return;
@@ -255,7 +266,7 @@ impl XhciBackendDevice for HostDevice {
         transfer.on_transfer_complete(TransferStatus::Error, 0);
     }
 
-    fn set_address(&self, address: UsbDeviceAddress) {
+    fn set_address(&mut self, address: UsbDeviceAddress) {
         debug!("Set address is invoked with address: {}", address);
     }
 }
