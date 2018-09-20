@@ -26,6 +26,8 @@ pub trait BusDevice: Send {
     /// Gets a register from the configuration space. Only used by PCI.
     /// * `reg_idx` - The index of the config register to read.
     fn config_register_read(&self, reg_idx: usize) -> u32 { 0 }
+    /// Invoked when the device is sandboxed.
+    fn on_sandboxed(&mut self) {}
 }
 
 #[derive(Debug)]
