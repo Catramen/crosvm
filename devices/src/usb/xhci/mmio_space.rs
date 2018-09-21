@@ -67,7 +67,7 @@ impl MMIOSpace {
 
     /// Write bar range. If the targeted register has a callback, it will be invoked with the new
     /// value.
-    pub fn write_bar(&mut self, addr: BarOffset, data: &[u8]) {
+    pub fn write_bar(&self, addr: BarOffset, data: &[u8]) {
         let mut current_addr: BarOffset = addr;
         while current_addr < addr + data.len() as BarOffset {
             if let Some(r) = self.get_register(current_addr) {

@@ -24,9 +24,9 @@ pub struct Xhci {
 
 impl Xhci {
     /// Create a new xHCI controller.
-    pub fn new(mem: GuestMemory, regs: XHCIRegs) -> Arc<Self> {
+    pub fn new(mem: GuestMemory, irq_evt: EventFd, regs: XHCIRegs) -> Arc<Self> {
         let (event_loop, join_handle) = EventLoop::start();
-        let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), &regs)));
+        let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), irq_evt, &regs)));
         let ports = Arc::new(Mutex::new(UsbPorts::new(&regs, interrupter.clone())));
         let device_slots = DeviceSlots::new(
             regs.dcbaap.clone(),
@@ -117,11 +117,6 @@ impl Xhci {
     /// Get the guest memory.
     pub fn guest_mem(&self) -> &GuestMemory {
         &self.mem
-    }
-
-    /// Set the EventFd of legacy PCI IRQ.
-    pub fn set_interrupt_fd(&self, fd: EventFd) {
-        self.interrupter.lock().unwrap().set_interrupt_fd(fd);
     }
 
     pub fn send_event(&self, trb: Trb) {

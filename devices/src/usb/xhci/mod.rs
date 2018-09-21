@@ -18,13 +18,13 @@ mod mmio_register;
 #[allow(unused_imports, dead_code)]
 mod interrupter;
 #[allow(unused_imports, dead_code)]
-pub mod mmio_space;
+mod mmio_space;
 #[allow(unused_imports, dead_code)]
 mod transfer_ring_controller;
 #[allow(unused_imports, dead_code)]
 mod usb_ports;
 #[allow(unused_imports, dead_code)]
-pub mod xhci;
+mod xhci;
 #[allow(unused_imports, dead_code)]
 mod xhci_abi;
 #[allow(unused_imports, dead_code)]
@@ -32,7 +32,8 @@ mod xhci_abi_schema;
 #[allow(unused_imports, dead_code)]
 pub mod xhci_backend_device;
 #[allow(unused_imports, dead_code)]
-pub mod xhci_regs;
+mod xhci_regs;
 #[allow(unused_imports, dead_code)]
 pub mod xhci_transfer;
 pub mod scatter_gather_buffer;
+pub mod xhci_controller;

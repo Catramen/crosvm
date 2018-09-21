@@ -16,7 +16,7 @@ use sys_util::{EventFd, GuestAddress, GuestMemory};
 /// See spec 4.17 for interrupters. Controller can send an event back to guest kernel driver
 /// through interrupter.
 pub struct Interrupter {
-    interrupt_fd: Option<EventFd>,
+    interrupt_fd: EventFd,
     usbsts: Register<u32>,
     iman: Register<u32>,
     erdp: Register<u64>,
@@ -29,9 +29,9 @@ pub struct Interrupter {
 }
 
 impl Interrupter {
-    pub fn new(mem: GuestMemory, regs: &XHCIRegs) -> Self {
+    pub fn new(mem: GuestMemory, irq_evt: EventFd, regs: &XHCIRegs) -> Self {
         Interrupter {
-            interrupt_fd: None,
+            interrupt_fd: irq_evt,
             usbsts: regs.usbsts.clone(),
             iman: regs.iman.clone(),
             erdp: regs.erdp.clone(),
@@ -42,10 +42,6 @@ impl Interrupter {
             moderation_counter: 0,
             event_ring: EventRing::new(mem),
         }
-    }
-
-    pub fn set_interrupt_fd(&mut self, fd: EventFd) {
-        self.interrupt_fd = Some(fd);
     }
 
     pub fn add_event(&mut self, trb: Trb) {
@@ -123,7 +119,7 @@ impl Interrupter {
             self.usbsts.set_bits(USB_STS_EVENT_INTERRUPT);
             self.iman.set_bits(IMAN_INTERRUPT_PENDING);
             self.erdp.set_bits(ERDP_EVENT_HANDLER_BUSY);
-            self.interrupt_fd.as_ref().unwrap().write(1).unwrap();
+            self.interrupt_fd.write(1).unwrap();
         }
     }
 }
