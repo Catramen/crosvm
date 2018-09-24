@@ -15,6 +15,7 @@ use std::fs::File;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::result;
 use std::sync::{Arc, Mutex};
+use sys_util::*;
 
 use devices::{Bus, BusError, PciDevice, PciDeviceError, PciInterruptPin,
               PciRoot, ProxyDevice, Serial};
@@ -171,6 +172,7 @@ pub fn generate_pci_root(devices: Vec<(Box<PciDevice + 'static>, Minijail)>,
                 .map_err(DeviceRegistrationError::RegisterIoevent)?;
             keep_fds.push(event.as_raw_fd());
         }
+        debug!("Add proxyed pci device");
         let proxy = ProxyDevice::new(device, &jail, keep_fds)
             .map_err(DeviceRegistrationError::ProxyDeviceCreation)?;
         let arced_dev = Arc::new(Mutex::new(proxy));

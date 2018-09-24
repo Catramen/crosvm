@@ -55,7 +55,7 @@ pub trait PciDevice: Send {
     /// * `data` - The data to write.
     fn write_bar(&mut self, addr: u64, data: &[u8]);
     /// Invoked when the device is sandboxed.
-    fn on_sandboxed(&mut self) {}
+    fn on_device_sandboxed(&mut self) {}
 }
 
 impl<T: PciDevice> BusDevice for T {
@@ -90,7 +90,8 @@ impl<T: PciDevice> BusDevice for T {
     }
 
     fn on_sandboxed(&mut self) {
-        self.on_sandboxed();
+        debug!("on sandboxed is invoked");
+        self.on_device_sandboxed();
     }
 }
 
@@ -133,5 +134,9 @@ impl<T: PciDevice + ?Sized> PciDevice for Box<T> {
     /// * `data` - The data to write.
     fn write_bar(&mut self, addr: u64, data: &[u8]) {
         (**self).write_bar(addr, data)
+    }
+    /// Invoked when the device is sandboxed.
+    fn on_device_sandboxed(&mut self) {
+        (**self).on_device_sandboxed()
     }
 }

@@ -36,6 +36,8 @@ impl XhciController {
             0,
             0,
         );
+        let class_code_reg = config_regs.read_reg(2);
+        config_regs.write_reg(2, class_code_reg | 0x30 << 8);
         XhciController {
             config_regs,
             irq_evt: None,
@@ -46,6 +48,7 @@ impl XhciController {
     }
 
     pub fn init_when_forked(&mut self) {
+        debug!("xhci_controller inited");
         let (mmio, regs) = init_xhci_mmio_space_and_regs();
         self.mmio = Some(mmio);
         self.xhci = Some(Xhci::new(
@@ -73,14 +76,20 @@ impl PciDevice for XhciController {
         &mut self,
         resources: &mut SystemAllocator,
     ) -> Result<Vec<(u64, u64)>, PciDeviceError> {
-        debug!("xhci_controller: Allocate io bars {}", XHCI_BAR0_SIZE);
+        debug!("xhci_controller: Allocate io bars {:x}", XHCI_BAR0_SIZE);
         // xHCI spec 5.2.1.
         let bar0 = resources
             .allocate_mmio_addresses(XHCI_BAR0_SIZE)
             .ok_or(PciDeviceError::IoAllocationFailed(XHCI_BAR0_SIZE))?;
-        self.config_regs
+        debug!("xhci_controller: Bar0 allocated {:x}", bar0);
+    //    self.config_regs
+    //        .add_memory_region(bar0, XHCI_BAR0_SIZE)
+    //        .ok_or(PciDeviceError::IoRegistrationFailed(bar0))?;
+        let idx = self.config_regs
             .add_memory_region(bar0, XHCI_BAR0_SIZE)
             .ok_or(PciDeviceError::IoRegistrationFailed(bar0))?;
+        debug!("xhci_controller: Bar0 index {:x}", idx);
+    
         Ok(vec![(bar0, XHCI_BAR0_SIZE)])
     }
 
@@ -95,25 +104,28 @@ impl PciDevice for XhciController {
 
     fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
         let bar0 = self.config_regs.get_bar_addr(0) as u64;
+        debug!("xhci_controller: bar0 is {:x}", bar0);
+        debug!("xhci_controller: read_bar addr: {:x}, data{:?}", addr - bar0, data);
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
         self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
-        debug!("xhci_controller: read_bar addr: {}, data{:?}", addr, data);
+        debug!("xhci_controller: read_result {:?}", data);
     }
 
     fn write_bar(&mut self, addr: u64, data: &[u8]) {
         let bar0 = self.config_regs.get_bar_addr(0) as u64;
+        debug!(
+            "xhci_controller: write_bar addr: {:x}, data: {:?}",
+            addr - bar0, data
+            );
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
         self.mmio.as_ref().unwrap().write_bar(addr - bar0, data);
-        debug!(
-            "xhci_controller: write_bar addr: {}, data: {:?}",
-            addr, data
-        );
     }
-    fn on_sandboxed(&mut self) {
+    fn on_device_sandboxed(&mut self) {
+        debug!("xhci On sandboxed invoked");
         self.init_when_forked();
     }
 }

@@ -307,7 +307,7 @@ impl AArch64 {
     /// This returns a base part of the kernel command for this architecture
     fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline {
         let mut cmdline = kernel_cmdline::Cmdline::new(sys_util::pagesize());
-        cmdline.insert_str("console=ttyS0 reboot=k panic=1").
+        cmdline.insert_str("console=ttyS0 debug reboot=k panic=1").
             unwrap();
         cmdline
     }
