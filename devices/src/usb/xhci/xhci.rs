@@ -57,8 +57,7 @@ impl Xhci {
 
         let xhci_weak0 = xhci_weak.clone();
         xhci.regs.usbcmd.set_write_cb(move |val: u32| {
-            xhci_weak0.upgrade().unwrap().usbcmd_callback(val);
-            val
+            xhci_weak0.upgrade().unwrap().usbcmd_callback(val)
         });
 
         let xhci_weak0 = xhci_weak.clone();
@@ -124,15 +123,18 @@ impl Xhci {
     }
 
     // Callback for usbcmd register write.
-    fn usbcmd_callback(&self, value: u32) {
+    fn usbcmd_callback(&self, value: u32) -> u32 {
         if (value & USB_CMD_RESET) > 0 {
+            debug!("xhci_controller: reset controller");
             self.reset();
-            return;
+            return value & (!USB_CMD_RESET);
         }
 
         if (value & USB_CMD_RUNSTOP) > 0 {
+            debug!("xhci_controller: clear halt bits");
             self.regs.usbsts.clear_bits(USB_STS_HALTED);
         } else {
+            debug!("xhci_controller: halt device");
             self.halt();
             self.regs.crcr.clear_bits(CRCR_COMMAND_RING_RUNNING);
         }
@@ -140,7 +142,9 @@ impl Xhci {
         // Enable interrupter if needed.
         let enabled = (value & USB_CMD_INTERRUPTER_ENABLE) > 0
             && (self.regs.iman.get_value() & IMAN_INTERRUPT_ENABLE) > 0;
+        debug!("xhci_controller: interrupter enable?: {}", enabled);
         self.interrupter.lock().unwrap().set_enabled(enabled);
+        value
     }
 
     // Callback for crcr register write.
@@ -244,6 +248,7 @@ impl Xhci {
     fn reset(&self) {
         self.regs.usbsts.set_bits(USB_STS_CONTROLLER_NOT_READY);
         let usbsts = self.regs.usbsts.clone();
+        let usbcmd = self.regs.usbcmd.clone();
         self.device_slots.stop_all_and_reset(move || {
             usbsts.clear_bits(USB_STS_CONTROLLER_NOT_READY);
         });

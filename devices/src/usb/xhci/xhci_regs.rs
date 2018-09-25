@@ -435,3 +435,4 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
 
     (mmio, xhci_regs)
 }
+

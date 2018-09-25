@@ -75,7 +75,7 @@ pub trait LinuxArch {
 pub enum DeviceRegistrationError {
     /// Could not allocate IO space for the device.
     AllocateIoAddrs(PciDeviceError),
-    /// Could not allocate an IRQ number.
+    /// Could not allocat an IRQ number.
     AllocateIrq,
     /// Could not create the mmio device to wrap a VirtioDevice.
     CreateMmioDevice(sys_util::Error),
@@ -172,7 +172,6 @@ pub fn generate_pci_root(devices: Vec<(Box<PciDevice + 'static>, Minijail)>,
                 .map_err(DeviceRegistrationError::RegisterIoevent)?;
             keep_fds.push(event.as_raw_fd());
         }
-        debug!("Add proxyed pci device");
         let proxy = ProxyDevice::new(device, &jail, keep_fds)
             .map_err(DeviceRegistrationError::ProxyDeviceCreation)?;
         let arced_dev = Arc::new(Mutex::new(proxy));

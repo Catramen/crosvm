@@ -433,8 +433,10 @@ impl DeviceSlot {
 
     pub fn stop_all_trc(&self, auto_callback: AutoCallback) {
         for trc in &self.transfer_ring_controllers {
-            let trc: &Arc<TransferRingController> = trc.as_ref().unwrap();
-            trc.stop(auto_callback.clone());
+            if trc.is_some() {
+                let trc: &Arc<TransferRingController> = trc.as_ref().unwrap();
+                trc.stop(auto_callback.clone());
+            }
         }
     }
 

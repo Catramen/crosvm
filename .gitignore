@@ -4,3 +4,7 @@ target/
 **/*.orig
 **/Cargo.lock
 !/Cargo.lock
+vm_kernel
+vm_rootfs.img
+vmlinux
+vmlinuz

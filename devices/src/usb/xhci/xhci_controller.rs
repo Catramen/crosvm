@@ -19,6 +19,7 @@ const XHCI_BAR0_SIZE: u64 = 0x10000;
 /// xHCI PCI interface implementation.
 pub struct XhciController {
     config_regs: PciConfiguration,
+    bar0: u64, // bar0 in config_regs will be changed by guest. Not sure why.
     irq_evt: Option<EventFd>,
     mmio: Option<MMIOSpace>,
     mem: Option<GuestMemory>,
@@ -40,6 +41,7 @@ impl XhciController {
         config_regs.write_reg(2, class_code_reg | 0x30 << 8);
         XhciController {
             config_regs,
+            bar0: 0,
             irq_evt: None,
             mmio: None,
             mem: None,
@@ -48,7 +50,10 @@ impl XhciController {
     }
 
     pub fn init_when_forked(&mut self) {
-        debug!("xhci_controller inited");
+        if (self.mmio.is_some()) {
+            debug!("xhci controller is already inited");
+            return;
+        }
         let (mmio, regs) = init_xhci_mmio_space_and_regs();
         self.mmio = Some(mmio);
         self.xhci = Some(Xhci::new(
@@ -81,15 +86,10 @@ impl PciDevice for XhciController {
         let bar0 = resources
             .allocate_mmio_addresses(XHCI_BAR0_SIZE)
             .ok_or(PciDeviceError::IoAllocationFailed(XHCI_BAR0_SIZE))?;
-        debug!("xhci_controller: Bar0 allocated {:x}", bar0);
-    //    self.config_regs
-    //        .add_memory_region(bar0, XHCI_BAR0_SIZE)
-    //        .ok_or(PciDeviceError::IoRegistrationFailed(bar0))?;
-        let idx = self.config_regs
+        self.config_regs
             .add_memory_region(bar0, XHCI_BAR0_SIZE)
             .ok_or(PciDeviceError::IoRegistrationFailed(bar0))?;
-        debug!("xhci_controller: Bar0 index {:x}", idx);
-    
+        self.bar0 = bar0;
         Ok(vec![(bar0, XHCI_BAR0_SIZE)])
     }
 
@@ -98,27 +98,44 @@ impl PciDevice for XhciController {
     }
 
     fn config_registers_mut(&mut self) -> &mut PciConfiguration {
+        let bar0 = self.config_regs.get_bar_addr(0) as u64;
+        debug!("xhci_controller: Confirm bar0 {:x}", bar0);
         debug!("xhci_controller: Config Register");
         &mut self.config_regs
     }
 
     fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
-        let bar0 = self.config_regs.get_bar_addr(0) as u64;
-        debug!("xhci_controller: bar0 is {:x}", bar0);
+        let bar0 = self.bar0;
         debug!("xhci_controller: read_bar addr: {:x}, data{:?}", addr - bar0, data);
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
         self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
         debug!("xhci_controller: read_result {:?}", data);
+        if data.len() == 4 {
+            let mut v: u64 = 0;
+            v |= (data[0] as u64);
+            v |= (data[1] as u64) << 8;
+            v |= (data[2] as u64) << 16;
+            v |= (data[3] as u64) << 24;
+            debug!("xhci_controller: read_result_hex {:08x}", v);
+        }
     }
 
     fn write_bar(&mut self, addr: u64, data: &[u8]) {
-        let bar0 = self.config_regs.get_bar_addr(0) as u64;
+        let bar0 = self.bar0;
         debug!(
             "xhci_controller: write_bar addr: {:x}, data: {:?}",
             addr - bar0, data
             );
+        if data.len() == 4 {
+            let mut v: u64 = 0;
+            v |= (data[0] as u64);
+            v |= (data[1] as u64) << 8;
+            v |= (data[2] as u64) << 16;
+            v |= (data[3] as u64) << 24;
+            debug!("xhci_controller: write_value_hex {:08x}", v);
+        }
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }

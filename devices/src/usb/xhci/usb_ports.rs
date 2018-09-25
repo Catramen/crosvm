@@ -37,7 +37,7 @@ impl UsbPorts {
         for i in 0..self.devices.len() {
             if self.devices[i].is_some() {
                 let port_id = (i + 1) as u8;
-                self.send_device_disconnected_event(port_id);
+                self.send_device_connected_event(port_id);
             }
         }
     }
