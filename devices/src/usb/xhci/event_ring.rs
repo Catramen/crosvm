@@ -76,17 +76,20 @@ impl EventRing {
 
     /// Set segment table size.
     pub fn set_seg_table_size(&mut self, size: u16) {
+        debug!("event ring seg table size is {}", size);
         self.segment_table_size = size;
     }
 
     /// Set segment table base addr.
     pub fn set_seg_table_base_addr(&mut self, addr: GuestAddress) {
+        debug!("event ring seg table base addr {:x}", addr.0);
         self.segment_table_base_address = addr;
         self.try_init();
     }
 
     /// Set dequeue pointer.
     pub fn set_dequeue_pointer(&mut self, addr: GuestAddress) {
+        debug!("event ring seg dequeue pointer {:x}", addr.0);
         self.dequeue_pointer = addr;
     }
 

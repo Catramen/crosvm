@@ -71,12 +71,14 @@ where
 
     /// Set dequeue pointer of the internal ring buffer.
     pub fn set_dequeue_pointer(&self, ptr: GuestAddress) {
+        debug!("dequeue pointer: {:x}", ptr.0);
         // Fast because this should only hanppen during xhci setup.
         self.ring_buffer.lock().unwrap().set_dequeue_pointer(ptr);
     }
 
     /// Set consumer cycle state.
     pub fn set_consumer_cycle_state(&self, state: bool) {
+        debug!("consumer cycle state: {}", state);
         // Fast because this should only hanppen during xhci setup.
         self.ring_buffer
             .lock()
@@ -86,6 +88,7 @@ where
 
     /// Start the ring buffer.
     pub fn start(&self) {
+        debug!("ring buffer started");
         let mut state = self.state.lock().unwrap();
         if *state != RingBufferState::Running {
             *state = RingBufferState::Running;
@@ -95,6 +98,7 @@ where
 
     /// Stop the ring buffer asynchronously.
     pub fn stop(&self, callback: AutoCallback) {
+        debug!("ring buffer stopped");
         let mut state = self.state.lock().unwrap();
         if *state == RingBufferState::Stopped {
             return;
@@ -122,6 +126,7 @@ where
     T: 'static + TransferDescriptorHandler + Send,
 {
     fn on_event(&self, _fd: RawFd) {
+        debug!("ring buffer start dequeue trbs");
         let _ = self.event.read();
         let transfer_descriptor = {
             let mut ring_buffer = self.ring_buffer.lock().unwrap();

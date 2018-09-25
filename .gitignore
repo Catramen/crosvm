@@ -8,3 +8,4 @@ vm_kernel
 vm_rootfs.img
 vmlinux
 vmlinuz
+*.txt

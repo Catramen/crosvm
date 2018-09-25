@@ -149,6 +149,7 @@ impl Xhci {
 
     // Callback for crcr register write.
     fn crcr_callback(&self, value: u64) -> u64 {
+        debug!("xhci_controller: write to crcr {:x}", value);
         if (self.regs.crcr.get_value() & CRCR_COMMAND_RING_RUNNING) == 0 {
             self.command_ring_controller
                 .set_dequeue_pointer(GuestAddress(value & CRCR_COMMAND_RING_POINTER));
@@ -164,6 +165,7 @@ impl Xhci {
     // Callback for portsc register write.
     fn portsc_callback(&self, index: u32, value: u32) -> u32 {
         let mut value = value;
+        debug!("xhci_controller: write to portsc index {} value {:x}", index, value);
         // xHCI spec 4.19.5. Note: we might want to change this logic if we support USB 3.0.
         if (value & PORTSC_PORT_RESET) > 0 || (value & PORTSC_WARM_PORT_RESET) > 0 {
             // Libusb onlys support blocking call to reset and "usually incurs a noticeable
@@ -182,6 +184,7 @@ impl Xhci {
 
     // Callback for doorbell register write.
     fn doorbell_callback(&self, index: u32, value: u32) {
+        debug!("xhci_controller: write to doorbell index {} value {:x}", index, value);
         let target: usize = (value & DOORBELL_TARGET) as usize;
         let stream_id: u16 = (value >> DOORBELL_STREAM_ID_OFFSET) as u16;
         if (self.regs.usbcmd.get_value() & USB_CMD_RUNSTOP) > 0 {
@@ -203,6 +206,7 @@ impl Xhci {
 
     // Callback for iman register write.
     fn iman_callback(&self, value: u32) {
+        debug!("xhci_controller: write to iman {:x}", value);
         let enabled: bool = ((value & IMAN_INTERRUPT_ENABLE) > 0)
             && ((self.regs.usbcmd.get_value() & USB_CMD_INTERRUPTER_ENABLE) > 0);
         self.interrupter.lock().unwrap().set_enabled(enabled);
@@ -210,6 +214,7 @@ impl Xhci {
 
     // Callback for imod register write.
     fn imod_callback(&self, value: u32) {
+        debug!("xhci_controller: write to imod {:x}", value);
         self.interrupter.lock().unwrap().set_moderation(
             (value & IMOD_INTERRUPT_MODERATION_INTERVAL) as u16,
             (value >> IMOD_INTERRUPT_MODERATION_COUNTER_OFFSET) as u16,
@@ -218,6 +223,7 @@ impl Xhci {
 
     // Callback for erstsz register write.
     fn erstsz_callback(&self, value: u32) {
+        debug!("xhci_controller: write to erstz {:x}", value);
         self.interrupter
             .lock()
             .unwrap()
@@ -226,6 +232,7 @@ impl Xhci {
 
     // Callback for erstba register write.
     fn erstba_callback(&self, value: u64) {
+        debug!("xhci_controller: write to erstba {:x}", value);
         self.interrupter
             .lock()
             .unwrap()
@@ -236,6 +243,7 @@ impl Xhci {
 
     // Callback for erdp register write.
     fn erdp_callback(&self, value: u64) {
+        debug!("xhci_controller: write to erdp {:x}", value);
         {
             let mut interrupter = self.interrupter.lock().unwrap();
             interrupter.set_event_ring_dequeue_pointer(GuestAddress(
