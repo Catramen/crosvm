@@ -9,22 +9,23 @@ use std::os::unix::io::RawFd;
 use std::os::raw::c_short;
 use sys_util::WatchingEvents;
 
-pub struct HostBackend {
+/// Context wraps libusb context with libusb event handling.
+pub struct Context {
     context: LibUsbContext,
     event_loop: EventLoop,
     event_handler: Arc<EventHandler>,
 }
 
-impl HostBackend {
-    pub fn new(event_loop: EventLoop) -> HostBackend {
+impl Context {
+    pub fn new(event_loop: EventLoop) -> Context {
         let context = LibUsbContext::new().unwrap();
-        let backend = HostBackend {
+        let ctx = Context {
             context: context.clone(),
             event_loop: event_loop,
             event_handler: Arc::new(LibUsbEventHandler{context: context.clone()}),
         };
-        backend.init_event_handler();
-        backend
+        ctx.init_event_handler();
+        ctx
     }
 
     fn init_event_handler(&self) {
@@ -42,6 +43,17 @@ impl HostBackend {
                 }
                 ));
 
+    }
+
+    pub fn get_device(&self, bus: u8, addr: u8) -> Option<LibUsbDevice> {
+        for device in self.get_pollfd_iter().unwrap() {
+            if device.get_bus_number() == bus &&
+                device.get_address() == addr {
+                    return Some(device);
+                }
+        }
+
+        None
     }
 }
 

@@ -25,6 +25,7 @@ pub struct HostDevice {
     // Endpoints only contains data endpoints (1 to 30). Control transfers are handled at device
     // level.
     endpoints: Vec<UsbEndpoint>,
+    device: LibUsbDevice,
     device_handle: DeviceHandle,
     ctl_ep_state: ControlEndpointState,
     control_transfer: Arc<Mutex<Option<UsbTransfer<ControlTransferBuffer>>>>,
@@ -33,10 +34,11 @@ pub struct HostDevice {
 }
 
 impl HostDevice {
-    pub fn new(handle: DeviceHandle) -> HostDevice {
+    pub fn new(device; LibUsbDevice) -> HostDevice {
         HostDevice {
             endpoints: vec![],
-            device_handle: handle,
+            device: LibUsbDevice,
+            device_handle: device.open().unwrap(),
             ctl_ep_state: ControlEndpointState::StatusStage,
             control_transfer: Arc::new(Mutex::new(Some(control_transfer(0)))),
             claimed_interface: vec![],
@@ -251,6 +253,14 @@ impl HostDevice {
 }
 
 impl XhciBackendDevice for HostDevice {
+    fn get_vid(&self) -> u16 {
+        self.device.get_device_descriptor.unwrap().idVendor
+    }
+
+    fn get_pid(&self) -> u16 {
+        self.device.get_device_descriptor.unwrap().idProduct
+    }
+
     fn submit_transfer(&mut self, transfer: XhciTransfer) {
         if transfer.get_endpoint_number() == 0 {
             self.handle_control_transfer(transfer);

@@ -11,6 +11,12 @@ use super::xhci_regs::{
 };
 use std::sync::{Arc, Mutex};
 
+/// Error type for usb ports.
+pub enum Error {
+    InvalidPort,
+    PortEmpty,
+}
+
 pub struct UsbPorts {
     portsc: Vec<Register<u32>>,
     usbsts: Register<u32>,
@@ -81,12 +87,12 @@ impl UsbPorts {
             .send_port_status_change_trb(port_id);
     }
 
-    pub fn disconnect_backend(&mut self, port_id: u8) -> Result<(), ()> {
+    pub fn disconnect_backend(&mut self, port_id: u8) -> Result<(), Error> {
         if port_id == 0 || port_id > MAX_PORTS {
-            return Err(());
+            return Err(Error::InvalidPort);
         }
         if self.devices[(port_id - 1) as usize].is_none() {
-            return Err(());
+            return Err(Error::PortEmpty);
         }
 
         self.devices[(port_id - 1) as usize] = None;
