@@ -19,15 +19,15 @@ const XHCI_BAR0_SIZE: u64 = 0x10000;
 /// xHCI PCI interface implementation.
 pub struct XhciController {
     config_regs: PciConfiguration,
+    mem: GuestMemory,
     bar0: u64, // bar0 in config_regs will be changed by guest. Not sure why.
     irq_evt: Option<EventFd>,
     mmio: Option<MMIOSpace>,
-    mem: Option<GuestMemory>,
     xhci: Option<Arc<Xhci>>,
 }
 
 impl XhciController {
-    pub fn new() -> Self {
+    pub fn new(mem: GuestMemory) -> Self {
         let mut config_regs = PciConfiguration::new(
             0x01b73, // fresco logic, (google = 0x1ae0)
             0x1000,  // fresco logic pdk. This chip has broken msi. See kernel xhci-pci.c
@@ -44,7 +44,7 @@ impl XhciController {
             bar0: 0,
             irq_evt: None,
             mmio: None,
-            mem: None,
+            mem: mem,
             xhci: None,
         }
     }
@@ -57,7 +57,7 @@ impl XhciController {
         let (mmio, regs) = init_xhci_mmio_space_and_regs();
         self.mmio = Some(mmio);
         self.xhci = Some(Xhci::new(
-            self.mem.as_ref().unwrap().clone(),
+            self.mem.clone(),
             self.irq_evt.take().unwrap(),
             regs,
         ));
@@ -73,10 +73,7 @@ impl PciDevice for XhciController {
         self.irq_evt = Some(irq_evt);
         debug!("xhci_controller: assign irq");
     }
-    fn set_guest_memory(&mut self, mem: GuestMemory) {
-        debug!("xhci_controller: set guest memory");
-        self.mem = Some(mem);
-    }
+
     fn allocate_io_bars(
         &mut self,
         resources: &mut SystemAllocator,

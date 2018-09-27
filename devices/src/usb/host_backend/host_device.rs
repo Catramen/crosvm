@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use usb::xhci::xhci_backend_device::{XhciBackendDevice, UsbDeviceAddress};
 use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferType};
+use usb_util::libusb_device::LibUsbDevice;
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, ControlTransferBuffer, control_transfer, TransferStatus};
 use usb_util::types::{UsbRequestSetup, ControlRequestDataPhaseTransferDirection, ControlRequestType, ControlRequestRecipient, StandardControlRequest};
@@ -34,7 +35,7 @@ pub struct HostDevice {
 }
 
 impl HostDevice {
-    pub fn new(device; LibUsbDevice) -> HostDevice {
+    pub fn new(device: LibUsbDevice) -> HostDevice {
         HostDevice {
             endpoints: vec![],
             device: LibUsbDevice,

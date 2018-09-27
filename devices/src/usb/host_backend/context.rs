@@ -8,6 +8,7 @@ use std::sync::{Arc, Weak};
 use std::os::unix::io::RawFd;
 use std::os::raw::c_short;
 use sys_util::WatchingEvents;
+use usb_util::libusb_device::LibUsbDevice;
 
 /// Context wraps libusb context with libusb event handling.
 pub struct Context {

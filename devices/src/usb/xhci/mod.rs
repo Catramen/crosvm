@@ -37,3 +37,4 @@ mod xhci_regs;
 pub mod xhci_transfer;
 pub mod scatter_gather_buffer;
 pub mod xhci_controller;
+pub mod xhci_backend_device_provider;
