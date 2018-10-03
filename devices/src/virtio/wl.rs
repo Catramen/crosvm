@@ -59,11 +59,12 @@ use data_model::VolatileMemoryError;
 use resources::GpuMemoryDesc;
 use sys_util::{Error, Result, EventFd, ScmSocket, SharedMemory, GuestAddress, GuestMemory,
                GuestMemoryError, PollContext, PollToken, FileFlags, pipe, round_up_to_page_size};
+use msg_socket::{MsgSocket, MsgError, MsgSender, MsgReceiver};
 
 #[cfg(feature = "wl-dmabuf")]
 use sys_util::ioctl_with_ref;
 
-use vm_control::{VmControlError, VmRequest, VmResponse, MaybeOwnedFd};
+use vm_control::{VmRequest, VmResponse, MaybeOwnedFd};
 use super::{VirtioDevice, Queue, DescriptorChain, INTERRUPT_STATUS_USED_RING, TYPE_WL};
 
 const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
@@ -372,7 +373,7 @@ enum WlError {
     AllocSetSize(Error),
     SocketConnect(io::Error),
     SocketNonBlock(io::Error),
-    VmControl(VmControlError),
+    VmControl(MsgError),
     VmBadResponse,
     CheckedOffset,
     GuestMemory(GuestMemoryError),
@@ -430,19 +431,20 @@ impl From<VolatileMemoryError> for WlError {
 
 #[derive(Clone)]
 struct VmRequester {
-    inner: Rc<RefCell<UnixDatagram>>,
+    inner: Rc<RefCell<MsgSocket<VmRequest, VmResponse>>>,
 }
 
 impl VmRequester {
     fn new(vm_socket: UnixDatagram) -> VmRequester {
-        VmRequester { inner: Rc::new(RefCell::new(vm_socket)) }
+        VmRequester { inner: Rc::new(RefCell::new(
+                    MsgSocket::<VmRequest, VmResponse>::new(vm_socket))) }
     }
 
     fn request(&self, request: VmRequest) -> WlResult<VmResponse> {
         let mut inner = self.inner.borrow_mut();
         let ref mut vm_socket = *inner;
-        request.send(vm_socket).map_err(WlError::VmControl)?;
-        VmResponse::recv(vm_socket).map_err(WlError::VmControl)
+        vm_socket.send(&request).map_err(WlError::VmControl)?;
+        vm_socket.recv().map_err(WlError::VmControl)
     }
 }
 

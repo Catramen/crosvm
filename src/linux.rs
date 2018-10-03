@@ -33,7 +33,8 @@ use qcow::{self, QcowFile};
 use sys_util::*;
 use sys_util;
 use vhost;
-use vm_control::VmRequest;
+use vm_control::{VmRequest, VmResponse};
+use msg_socket::{UnlinkMsgSocket, MsgSender, MsgReceiver};
 
 use Config;
 use DiskType;
@@ -729,11 +730,15 @@ pub fn run_config(cfg: Config) -> Result<()> {
     if let Some(ref path_string) = cfg.socket_path {
         let path = Path::new(path_string);
         let dgram = UnixDatagram::bind(path).map_err(Error::CreateSocket)?;
-        control_sockets.push(UnlinkUnixDatagram(dgram));
+        control_sockets.push(
+            UnlinkMsgSocket::<VmResponse, VmRequest>::new(UnlinkUnixDatagram(dgram))
+            );
     };
     let (wayland_host_socket, wayland_device_socket) = UnixDatagram::pair()
         .map_err(Error::CreateSocket)?;
-    control_sockets.push(UnlinkUnixDatagram(wayland_host_socket));
+    control_sockets.push(
+        UnlinkMsgSocket::<VmResponse, VmRequest>::new(UnlinkUnixDatagram(wayland_host_socket))
+        );
     // Balloon gets a special socket so balloon requests can be forwarded from the main process.
     let (balloon_host_socket, balloon_device_socket) = UnixDatagram::pair()
         .map_err(Error::CreateSocket)?;
@@ -748,7 +753,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
 }
 
 fn run_control(mut linux: RunnableLinuxVm,
-               control_sockets: Vec<UnlinkUnixDatagram>,
+               control_sockets: Vec<UnlinkMsgSocket<VmResponse, VmRequest>>,
                balloon_host_socket: UnixDatagram,
                sigchld_fd: SignalFd) -> Result<()> {
     // Paths to get the currently available memory and the low memory threshold.
@@ -963,7 +968,7 @@ fn run_control(mut linux: RunnableLinuxVm,
                 }
                 Token::VmControl { index } => {
                     if let Some(socket) = control_sockets.get(index as usize) {
-                        match VmRequest::recv(socket.as_ref()) {
+                        match socket.recv() {
                             Ok(request) => {
                                 let mut running = true;
                                 let response =
@@ -971,7 +976,7 @@ fn run_control(mut linux: RunnableLinuxVm,
                                                     &mut linux.resources,
                                                     &mut running,
                                                     &balloon_host_socket);
-                                if let Err(e) = response.send(socket.as_ref()) {
+                                if let Err(e) = socket.send(&response) {
                                     error!("failed to send VmResponse: {:?}", e);
                                 }
                                 if !running {

@@ -134,6 +134,7 @@ dependencies = [
  "gpu_renderer 0.1.0",
  "io_jail 0.1.0",
  "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
+ "msg_socket 0.1.0",
  "net_sys 0.1.0",
  "net_util 0.1.0",
  "p9 0.1.0",
@@ -218,6 +219,7 @@ version = "0.1.0"
 dependencies = [
  "kvm_sys 0.1.0",
  "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
+ "msg_socket 0.1.0",
  "sys_util 0.1.0",
 ]
 
@@ -372,6 +374,7 @@ dependencies = [
  "data_model 0.1.0",
  "gpu_buffer 0.1.0",
  "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
+ "msg_socket 0.1.0",
  "sys_util 0.1.0",
 ]
 
@@ -437,6 +440,7 @@ dependencies = [
  "data_model 0.1.0",
  "kvm 0.1.0",
  "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
+ "msg_socket 0.1.0",
  "resources 0.1.0",
  "sys_util 0.1.0",
 ]

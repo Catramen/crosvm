@@ -8,6 +8,8 @@ extern crate libc;
 extern crate kvm_sys;
 #[macro_use]
 extern crate sys_util;
+#[macro_use]
+extern crate msg_socket;
 
 mod cap;
 
@@ -28,6 +30,7 @@ use sys_util::{GuestAddress, GuestMemory, MemoryMapping, EventFd,
 #[allow(unused_imports)]
 use sys_util::{ioctl, ioctl_with_val, ioctl_with_ref, ioctl_with_mut_ref, ioctl_with_ptr,
                ioctl_with_mut_ptr};
+use msg_socket::{MsgOnSocket, MsgError, MsgResult};
 
 pub use cap::*;
 
@@ -208,7 +211,7 @@ impl AsRawFd for Kvm {
 }
 
 /// An address either in programmable I/O space or in memory mapped I/O space.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, MsgOnSocket)]
 pub enum IoeventAddress {
     Pio(u64),
     Mmio(u64),
