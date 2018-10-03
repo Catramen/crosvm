@@ -24,3 +24,4 @@ sys_util = { path = "../sys_util" }
 vhost = { path = "../vhost" }
 virtio_sys = { path = "../virtio_sys" }
 vm_control = { path = "../vm_control" }
+msg_socket = { path = "../msg_socket" }

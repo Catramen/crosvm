@@ -10,6 +10,8 @@ use libc::EINVAL;
 #[cfg(feature = "wl-dmabuf")]
 use gpu_buffer;
 use sys_util;
+use msg_socket::{MsgOnSocket, MsgResult};
+use std::os::unix::io::RawFd;
 
 #[derive(Debug)]
 pub enum GpuAllocatorError {
@@ -18,14 +20,14 @@ pub enum GpuAllocatorError {
 }
 
 /// Struct that describes the offset and stride of a plane located in GPU memory.
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default, MsgOnSocket)]
 pub struct GpuMemoryPlaneDesc {
     pub stride: u32,
     pub offset: u32,
 }
 
 /// Struct that describes a GPU memory allocation that consists of up to 3 planes.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, MsgOnSocket)]
 pub struct GpuMemoryDesc {
     pub planes: [GpuMemoryPlaneDesc; 3],
 }
