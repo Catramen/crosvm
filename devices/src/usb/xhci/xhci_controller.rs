@@ -51,7 +51,6 @@ impl XhciController {
             0,
         );
         let class_code_reg = config_regs.read_reg(2);
-        config_regs.write_reg(2, class_code_reg | 0x30 << 8);
         XhciController {
             config_regs,
             bar0: 0,
@@ -91,11 +90,11 @@ impl PciDevice for XhciController {
         &mut self,
         resources: &mut SystemAllocator,
     ) -> Result<Vec<(u64, u64)>, PciDeviceError> {
-        debug!("xhci_controller: Allocate io bars {:x}", XHCI_BAR0_SIZE);
         // xHCI spec 5.2.1.
         let bar0 = resources
             .allocate_mmio_addresses(XHCI_BAR0_SIZE)
             .ok_or(PciDeviceError::IoAllocationFailed(XHCI_BAR0_SIZE))?;
+        debug!("xhci_controller: Allocate io bars {:x}", bar0);
         self.config_regs
             .add_memory_region(bar0, XHCI_BAR0_SIZE)
             .ok_or(PciDeviceError::IoRegistrationFailed(bar0))?;
@@ -104,11 +103,15 @@ impl PciDevice for XhciController {
     }
 
     fn config_registers(&self) -> &PciConfiguration {
+        debug!("xhci_controller: config register");
         &self.config_regs
     }
 
     fn config_registers_mut(&mut self) -> &mut PciConfiguration {
         let bar0 = self.config_regs.get_bar_addr(0) as u64;
+        let reg = self.config_regs.read_reg(2);
+        debug!("xhci_controller: config bar0 {:x}, class reg {:x}", bar0, reg);
+
         &mut self.config_regs
     }
 
@@ -132,10 +135,10 @@ impl PciDevice for XhciController {
 
     fn write_bar(&mut self, addr: u64, data: &[u8]) {
         let bar0 = self.bar0;
-       // debug!(
-       //     "xhci_controller: write_bar addr: {:x}, data: {:?}",
-       //     addr - bar0, data
-       //     );
+        debug!(
+            "xhci_controller: write_bar addr: {:x}, data: {:?}",
+            addr - bar0, data
+            );
         if data.len() == 4 {
             let mut v: u64 = 0;
             v |= (data[0] as u64);
