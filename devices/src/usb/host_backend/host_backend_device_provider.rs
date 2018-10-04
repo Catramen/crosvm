@@ -20,23 +20,9 @@ use super::host_device::HostDevice;
 use usb::event_loop::EventLoop;
 use usb::xhci::usb_ports::UsbPorts;
 use msg_socket::{MsgOnSocket, MsgError, MsgResult, MsgSocket, MsgReceiver, MsgSender};
+use vm_control::{UsbControlCommand, UsbControlResult, UsbControlSocket};
 
 const SOCKET_TIMEOUT_MS: u64 = 2000;
-
-#[derive(MsgOnSocket)]
-enum UsbControlCommand {
-    AttachDevice{bus: u8, addr: u8},
-    DetachDevice{port: u8},
-    ListDevice{port: u8},
-}
-
-#[derive(MsgOnSocket)]
-pub enum UsbControlResult {
-    Ok{port: u8},
-    NoAvailablePort,
-    NoSuchDevice,
-    Device{vid: u16, pid: u16},
-}
 
 pub struct HostBackendDeviceProvider {
     sock: Option<MsgSocket<UsbControlResult, UsbControlCommand>>,
@@ -45,7 +31,7 @@ pub struct HostBackendDeviceProvider {
 
 impl HostBackendDeviceProvider {
     pub fn create() -> (
-        HostBackendDeviceProviderControlSocket,
+        UsbControlSocket,
         HostBackendDeviceProvider,
     ) {
         let (child_sock, control_sock) = UnixDatagram::pair().unwrap();
@@ -88,42 +74,6 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
         self.sock.as_ref().unwrap().as_ref().as_raw_fd()
     }
 }
-
-pub type HostBackendDeviceProviderControlSocket = MsgSocket<UsbControlCommand, UsbControlResult>;
-
-/*
-pub struct HostBackendDeviceProviderController {
-    sock: MsgSocket<Command, CommandResult>,
-}
-
-impl HostBackendDeviceProviderController {
-    fn new(sock: UnixDatagram) -> Self {
-        HostBackendDeviceProviderController {
-            control_sock: MsgSocket::<Command, CommandResult>::new(sock)
-        }
-    }
-    
-    pub fn attach_device(&self, bus: u8, addr: u8) -> MsgResult<u8> {
-        self.sock.send(&Command::AttachDevice{bus, addr})?;
-        let result = self.sock.recv()?;
-        Ok(result)
-    }
-    pub fn detach_device(&self, port: u8) -> MsgResult<u8> {
-        self.sock.send(&Command::DetachDevice{port})?;
-        let result = self.sock.recv()?;
-        if let CommandResult::Ok(port) = result {
-            Ok(port);
-        } else {
-            panic!("Wrong result from usb host backend provider");
-        }
-    }
-
-    pub fn list_device(&self, port: u8) -> MsgResult<(u16, u16)> {
-        self.sock.send(&Command::ListDevice{port})?;
-        let result = self.sock.recv()?;
-        if let CommandResult::
-    }
-}*/
 
 /// ProviderInner listens to control socket.
 struct ProviderInner {

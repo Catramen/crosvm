@@ -13,6 +13,7 @@ use sys_util::{EventFd, GuestAddress, GuestMemory};
 use usb::xhci::mmio_space::MMIOSpace;
 use usb::xhci::xhci::Xhci;
 use usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XHCIRegs};
+use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 
 const XHCI_BAR0_SIZE: u64 = 0x10000;
 
@@ -38,7 +39,7 @@ pub struct XhciController {
 }
 
 impl XhciController {
-    pub fn new(mem: GuestMemory) -> Self {
+    pub fn new(mem: GuestMemory, usb_provider: HostBackendDeviceProvider) -> Self {
         let mut config_regs = PciConfiguration::new(
             0x01b73, // fresco logic, (google = 0x1ae0)
             0x1000,  // fresco logic pdk. This chip has broken msi. See kernel xhci-pci.c
@@ -113,12 +114,12 @@ impl PciDevice for XhciController {
 
     fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
         let bar0 = self.bar0;
-       // debug!("xhci_controller: read_bar addr: {:x}, data{:?}", addr - bar0, data);
+        debug!("xhci_controller: read_bar addr: {:x}, data{:?}", addr - bar0, data);
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
         self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
-       // debug!("xhci_controller: read_result {:?}", data);
+        debug!("xhci_controller: read_result {:?}", data);
         if data.len() == 4 {
             let mut v: u64 = 0;
             v |= (data[0] as u64);

@@ -44,3 +44,4 @@ pub use self::proxy::Error as ProxyError;
 pub use self::serial::Serial;
 pub use self::virtio::VirtioPciDevice;
 pub use self::usb::xhci::xhci_controller::XhciController;
+pub use self::usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;

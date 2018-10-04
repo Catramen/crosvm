@@ -25,7 +25,7 @@ use rand::thread_rng;
 use rand::distributions::{IndependentSample, Range};
 
 use byteorder::{ByteOrder, LittleEndian};
-use devices::{self, PciDevice, VirtioPciDevice, XhciController};
+use devices::{self, PciDevice, VirtioPciDevice, XhciController, HostBackendDeviceProvider};
 use io_jail::{self, Minijail};
 use kvm::*;
 use net_util::Tap;
@@ -33,7 +33,7 @@ use qcow::{self, QcowFile};
 use sys_util::*;
 use sys_util;
 use vhost;
-use vm_control::{VmRequest, VmResponse};
+use vm_control::{VmRequest, VmResponse, UsbControlSocket};
 use msg_socket::{UnlinkMsgSocket, MsgSender, MsgReceiver};
 
 use Config;
@@ -243,6 +243,7 @@ fn create_virtio_devs(
     _exit_evt: &EventFd,
     wayland_device_socket: UnixDatagram,
     balloon_device_socket: UnixDatagram,
+    usb_provider: HostBackendDeviceProvider,
 ) -> std::result::Result<Vec<(Box<PciDevice + 'static>, Minijail)>, Box<error::Error>> {
     static DEFAULT_PIVOT_ROOT: &'static str = "/var/empty";
 
@@ -595,6 +596,10 @@ fn create_virtio_devs(
         pci_devices.push((pci_dev, jail));
     }
 
+    // Create xhci controller.
+    let usb_controller = XhciController::new(mem.clone(), usb_provider);
+    pci_devices.push((Box::new(usb_controller), Minijail::new().unwrap()));
+
     Ok(pci_devices)
 }
 
@@ -714,6 +719,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
 
     let pci_devices: Vec<(Box<PciDevice + 'static>, Minijail)> = Vec::new();
 
+    let (usb_control_socket, usb_provider) = HostBackendDeviceProvider::create();
     // Masking signals is inherently dangerous, since this can persist across clones/execs. Do this
     // before any jailed devices have been spawned, so that we can catch any of them that fail very
     // quickly.
@@ -750,15 +756,17 @@ pub fn run_config(cfg: Config) -> Result<()> {
     let linux = Arch::build_vm(components,
                                |m, e| create_virtio_devs(virtio_dev_info, m, e,
                                                          wayland_device_socket,
-                                                         balloon_device_socket))
+                                                         balloon_device_socket,
+                                                         usb_provider))
         .map_err(Error::BuildingVm)?;
-    run_control(linux, control_sockets, balloon_host_socket, sigchld_fd)
+    run_control(linux, control_sockets, balloon_host_socket, sigchld_fd, usb_control_socket)
 }
 
 fn run_control(mut linux: RunnableLinuxVm,
                control_sockets: Vec<UnlinkMsgSocket<VmResponse, VmRequest>>,
                balloon_host_socket: UnixDatagram,
-               sigchld_fd: SignalFd) -> Result<()> {
+               sigchld_fd: SignalFd,
+               usb_control_socket: UsbControlSocket) -> Result<()> {
     // Paths to get the currently available memory and the low memory threshold.
     const LOWMEM_MARGIN: &'static str = "/sys/kernel/mm/chromeos-low_mem/margin";
     const LOWMEM_AVAILABLE: &'static str = "/sys/kernel/mm/chromeos-low_mem/available";
@@ -978,7 +986,8 @@ fn run_control(mut linux: RunnableLinuxVm,
                                     request.execute(&mut linux.vm,
                                                     &mut linux.resources,
                                                     &mut running,
-                                                    &balloon_host_socket);
+                                                    &balloon_host_socket,
+                                                    &usb_control_socket);
                                 if let Err(e) = socket.send(&response) {
                                     error!("failed to send VmResponse: {:?}", e);
                                 }

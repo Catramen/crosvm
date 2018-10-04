@@ -13,6 +13,7 @@
 extern crate byteorder;
 extern crate kvm;
 extern crate libc;
+#[macro_use]
 extern crate sys_util;
 extern crate resources;
 #[macro_use]
@@ -23,13 +24,13 @@ use std::io::{Seek, SeekFrom};
 use std::os::unix::io::{AsRawFd, RawFd, FromRawFd};
 use std::os::unix::net::UnixDatagram;
 
-use libc::{EINVAL, ENODEV};
+use libc::{EINVAL, ENODEV, EIO};
 
 use byteorder::{LittleEndian, WriteBytesExt};
 use sys_util::{EventFd, Result, Error as SysError, MmapError, MemoryMapping, GuestAddress};
 use resources::{GpuMemoryDesc, SystemAllocator};
 use kvm::{IoeventAddress, Vm};
-use msg_socket::{MsgOnSocket, MsgError, MsgResult};
+use msg_socket::{MsgOnSocket, MsgError, MsgResult, MsgSocket, MsgSender, MsgReceiver};
 
 /// A file descriptor either borrowed or owned by this.
 pub enum MaybeOwnedFd {
@@ -63,6 +64,23 @@ impl MsgOnSocket for MaybeOwnedFd {
     }
 }
 
+#[derive(MsgOnSocket)]
+pub enum UsbControlCommand {
+    AttachDevice{bus: u8, addr: u8},
+    DetachDevice{port: u8},
+    ListDevice{port: u8},
+}
+
+#[derive(MsgOnSocket)]
+pub enum UsbControlResult {
+    Ok{port: u8},
+    NoAvailablePort,
+    NoSuchDevice,
+    Device{vid: u16, pid: u16},
+}
+
+pub type UsbControlSocket = MsgSocket<UsbControlCommand, UsbControlResult>;
+
 /// A request to the main process to perform some operation on the VM.
 ///
 /// Unless otherwise noted, each request should expect a `VmResponse::Ok` to be received on success.
@@ -84,6 +102,8 @@ pub enum VmRequest {
     /// Allocate GPU buffer of a given size/format and register the memory into guest address space.
     /// The response variant is `VmResponse::AllocateAndRegisterGpuMemory`
     AllocateAndRegisterGpuMemory { width: u32, height: u32, format: u32 },
+    /// Command to use controller.
+    UsbCommand(UsbControlCommand),
 }
 
 fn register_memory(vm: &mut Vm, allocator: &mut SystemAllocator,
@@ -118,7 +138,8 @@ impl VmRequest {
     /// `VmResponse` with the intended purpose of sending the response back over the  socket that
     /// received this `VmRequest`.
     pub fn execute(&self, vm: &mut Vm, sys_allocator: &mut SystemAllocator, running: &mut bool,
-                   balloon_host_socket: &UnixDatagram) -> VmResponse {
+                   balloon_host_socket: &UnixDatagram, usb_control_socket: &UsbControlSocket)
+        -> VmResponse {
         *running = true;
         match self {
             &VmRequest::Exit => {
@@ -183,6 +204,20 @@ impl VmRequest {
                     Err(e) => VmResponse::Err(e),
                 }
             }
+            &VmRequest::UsbCommand(ref cmd) => {
+                let res = usb_control_socket.send(cmd);
+                if let Err(e) = res {
+                    error!("fail to send command to usb control socket {:?}", e);
+                    return VmResponse::Err(SysError::new(EIO));
+                }
+                match usb_control_socket.recv() {
+                    Ok(response) => VmResponse::UsbResponse(response),
+                    Err(e) => {
+                        error!("fail to recv command from usb control socket {:?}", e);
+                        return VmResponse::Err(SysError::new(EIO));
+                    }
+                }
+            }
         }
     }
 }
@@ -202,4 +237,6 @@ pub enum VmResponse {
     /// The request to allocate and register GPU memory into guest address space was successfully
     /// done at page frame number `pfn` and memory slot number `slot` for buffer with `desc`.
     AllocateAndRegisterGpuMemory { fd: MaybeOwnedFd, pfn: u64, slot: u32, desc: GpuMemoryDesc },
+    /// Results of usb control commands.
+    UsbResponse(UsbControlResult),
 }
