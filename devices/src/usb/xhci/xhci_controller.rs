@@ -4,7 +4,7 @@
 
 use pci::{
     PciClassCode, PciConfiguration, PciDevice, PciDeviceError, PciHeaderType, PciInterruptPin,
-    PciSerialBusSubClass,
+    PciSerialBusSubClass, PciProgrammingInterface,
 };
 use resources::SystemAllocator;
 use std::os::unix::io::RawFd;
@@ -15,6 +15,17 @@ use usb::xhci::xhci::Xhci;
 use usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XHCIRegs};
 
 const XHCI_BAR0_SIZE: u64 = 0x10000;
+
+#[derive(Clone, Copy)]
+enum UsbControllerProgrammingInterface {
+    Usb3HostController = 0x30,
+}
+
+impl PciProgrammingInterface for UsbControllerProgrammingInterface {
+    fn get_register_value(&self) -> u8 {
+        *self as u8
+    }
+}
 
 /// xHCI PCI interface implementation.
 pub struct XhciController {
@@ -33,6 +44,7 @@ impl XhciController {
             0x1000,  // fresco logic pdk. This chip has broken msi. See kernel xhci-pci.c
             PciClassCode::SerialBusController,
             &PciSerialBusSubClass::USB,
+            Some(&UsbControllerProgrammingInterface::Usb3HostController),
             PciHeaderType::Device,
             0,
             0,

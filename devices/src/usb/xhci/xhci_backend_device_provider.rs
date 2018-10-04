@@ -5,6 +5,8 @@
 use super::xhci_backend_device::XhciBackendDevice;
 use super::usb_ports::UsbPorts;
 use usb::event_loop::EventLoop;
+use std::sync::{Arc, Mutex};
+use std::os::unix::io::RawFd;
 
 /// Xhci backend provider will run on an EventLoop and connect new devices to usb ports.
 pub trait XhciBackendDeviceProvider: Send {

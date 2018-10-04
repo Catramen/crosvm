@@ -22,8 +22,6 @@ mod mmio_space;
 #[allow(unused_imports, dead_code)]
 mod transfer_ring_controller;
 #[allow(unused_imports, dead_code)]
-mod usb_ports;
-#[allow(unused_imports, dead_code)]
 mod xhci;
 #[allow(unused_imports, dead_code)]
 mod xhci_abi;
@@ -38,3 +36,5 @@ pub mod xhci_transfer;
 pub mod scatter_gather_buffer;
 pub mod xhci_controller;
 pub mod xhci_backend_device_provider;
+#[allow(unused_imports, dead_code)]
+pub mod usb_ports;

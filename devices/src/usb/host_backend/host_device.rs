@@ -36,10 +36,11 @@ pub struct HostDevice {
 
 impl HostDevice {
     pub fn new(device: LibUsbDevice) -> HostDevice {
+        let device_handle = device.open().unwrap();
         HostDevice {
             endpoints: vec![],
-            device: LibUsbDevice,
-            device_handle: device.open().unwrap(),
+            device: device,
+            device_handle: device_handle,
             ctl_ep_state: ControlEndpointState::StatusStage,
             control_transfer: Arc::new(Mutex::new(Some(control_transfer(0)))),
             claimed_interface: vec![],
@@ -255,11 +256,11 @@ impl HostDevice {
 
 impl XhciBackendDevice for HostDevice {
     fn get_vid(&self) -> u16 {
-        self.device.get_device_descriptor.unwrap().idVendor
+        self.device.get_device_descriptor().unwrap().idVendor
     }
 
     fn get_pid(&self) -> u16 {
-        self.device.get_device_descriptor.unwrap().idProduct
+        self.device.get_device_descriptor().unwrap().idProduct
     }
 
     fn submit_transfer(&mut self, transfer: XhciTransfer) {

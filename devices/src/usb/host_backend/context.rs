@@ -4,7 +4,7 @@
 
 use usb::event_loop::{EventLoop, EventHandler};
 use usb_util::libusb_context::{LibUsbContext, LibUsbPollfdChangeHandler};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Weak, Mutex};
 use std::os::unix::io::RawFd;
 use std::os::raw::c_short;
 use sys_util::WatchingEvents;
@@ -13,7 +13,7 @@ use usb_util::libusb_device::LibUsbDevice;
 /// Context wraps libusb context with libusb event handling.
 pub struct Context {
     context: LibUsbContext,
-    event_loop: EventLoop,
+    event_loop: Mutex<EventLoop>,
     event_handler: Arc<EventHandler>,
 }
 
@@ -22,7 +22,7 @@ impl Context {
         let context = LibUsbContext::new().unwrap();
         let ctx = Context {
             context: context.clone(),
-            event_loop: event_loop,
+            event_loop: Mutex::new(event_loop),
             event_handler: Arc::new(LibUsbEventHandler{context: context.clone()}),
         };
         ctx.init_event_handler();
@@ -31,7 +31,7 @@ impl Context {
 
     fn init_event_handler(&self) {
         for pollfd in self.context.get_pollfd_iter() {
-            self.event_loop.add_event(pollfd.fd,
+            self.event_loop.lock().unwrap().add_event(pollfd.fd,
                                       WatchingEvents::new(pollfd.events as u32),
                                       Arc::downgrade(&self.event_handler)
                                       );
@@ -39,7 +39,7 @@ impl Context {
 
         self.context.set_pollfd_notifiers(Box::new(
                 PollfdChangeHandler {
-                    event_loop: self.event_loop.clone(),
+                    event_loop: self.event_loop.lock().unwrap().clone(),
                     event_handler: Arc::downgrade(&self.event_handler),
                 }
                 ));
@@ -47,7 +47,7 @@ impl Context {
     }
 
     pub fn get_device(&self, bus: u8, addr: u8) -> Option<LibUsbDevice> {
-        for device in self.get_pollfd_iter().unwrap() {
+        for device in self.context.get_device_iter().unwrap() {
             if device.get_bus_number() == bus &&
                 device.get_address() == addr {
                     return Some(device);

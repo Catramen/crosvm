@@ -19,149 +19,122 @@ use byteorder::{LittleEndian, NativeEndian, ByteOrder};
 use super::host_device::HostDevice;
 use usb::event_loop::EventLoop;
 use usb::xhci::usb_ports::UsbPorts;
+use msg_socket::{MsgOnSocket, MsgError, MsgResult, MsgSocket, MsgReceiver, MsgSender};
 
 const SOCKET_TIMEOUT_MS: u64 = 2000;
-// size_of(command::attach: u8, bus: u8, addr: u8, padding: u8)
-// size_of(command::detach/list: u8, port: u8)
-// size_of(vid: u16, pid: u16)
-const MSG_SIZE: usize = 3;
 
-/// Errors for backend devices provider.
-#[derive(Debug)]
-pub enum Error {
-    Io(io::Error),
-}
-pub type Result<T> = std::result::Result<T, Error>;
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &Error::Io(ref e) => write!(f, "IO error {}.", e),
-        }
-    }
+#[derive(MsgOnSocket)]
+enum UsbControlCommand {
+    AttachDevice{bus: u8, addr: u8},
+    DetachDevice{port: u8},
+    ListDevice{port: u8},
 }
 
-enum Command {
-    AttachDevice = 0,
-    DetachDevice = 1,
-    ListDevice = 2,
+#[derive(MsgOnSocket)]
+pub enum UsbControlResult {
+    Ok{port: u8},
+    NoAvailablePort,
+    NoSuchDevice,
+    Device{vid: u16, pid: u16},
 }
 
 pub struct HostBackendDeviceProvider {
-    sock: Option<UnixDatagram>,
+    sock: Option<MsgSocket<UsbControlResult, UsbControlCommand>>,
     inner: Option<Arc<ProviderInner>>,
 }
 
 impl HostBackendDeviceProvider {
     pub fn create() -> (
-        HostBackendDeviceProviderController,
+        HostBackendDeviceProviderControlSocket,
         HostBackendDeviceProvider,
     ) {
-        let (child_sock, control_sock) = UnixDatagram::pair().map_err(Error::Io)?;
+        let (child_sock, control_sock) = UnixDatagram::pair().unwrap();
         control_sock
-            .set_write_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS)))
-            .map_err(Error::Io)?;
+            .set_write_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS))).unwrap();
         control_sock
-            .set_read_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS)))
-            .map_err(Error::Io)?;
-        let controller = HostBackendDeviceProviderController { control_sock };
+            .set_read_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS))).unwrap();
 
         let provider = HostBackendDeviceProvider {
-            event_loop: None,
-            sock: Some(child_sock),
+            sock: Some(
+                      MsgSocket::<UsbControlResult, UsbControlCommand>::new(child_sock)
+                      ),
             inner: None,
         };
-        (controller, provider)
+        (MsgSocket::<UsbControlCommand, UsbControlResult>::new(control_sock), provider)
     }
 }
 
 impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
     fn start(&mut self, event_loop: EventLoop, ports: Arc<Mutex<UsbPorts>>) {
-        if self.event_loop.is_some() {
-            panic!("Event loop is already set.");
-        }
         if self.inner.is_some() {
             panic!("Host backend provider event loop is already set");
         }
-        let event_fd = self.sock.as_ref().unwrap().as_raw_fd();
+        let event_fd = self.sock.as_ref().unwrap().as_ref().as_raw_fd();
         let inner = Arc::new(ProviderInner::new(
-            self.sock.take(),
+            self.sock.take().unwrap(),
             event_loop.clone(),
             ports,
         ));
+        let handler: Arc<EventHandler> = inner.clone();
         event_loop.add_event(
             event_fd,
-            WatchingEvents::new().set_read(),
-            Arc::downgrade(&inner),
+            WatchingEvents::empty().set_read(),
+            Arc::downgrade(&handler),
         );
         self.inner = Some(inner);
     }
 
     fn keep_fds(&self) -> RawFd {
-        self.sock.as_raw_fd()
+        self.sock.as_ref().unwrap().as_ref().as_raw_fd()
     }
 }
 
+pub type HostBackendDeviceProviderControlSocket = MsgSocket<UsbControlCommand, UsbControlResult>;
+
+/*
 pub struct HostBackendDeviceProviderController {
-    control_sock: UnixDatagram,
+    sock: MsgSocket<Command, CommandResult>,
 }
 
 impl HostBackendDeviceProviderController {
     fn new(sock: UnixDatagram) -> Self {
-        HostBackendDeviceProviderController { control_sock: sock }
+        HostBackendDeviceProviderController {
+            control_sock: MsgSocket::<Command, CommandResult>::new(sock)
+        }
+    }
+    
+    pub fn attach_device(&self, bus: u8, addr: u8) -> MsgResult<u8> {
+        self.sock.send(&Command::AttachDevice{bus, addr})?;
+        let result = self.sock.recv()?;
+        Ok(result)
+    }
+    pub fn detach_device(&self, port: u8) -> MsgResult<u8> {
+        self.sock.send(&Command::DetachDevice{port})?;
+        let result = self.sock.recv()?;
+        if let CommandResult::Ok(port) = result {
+            Ok(port);
+        } else {
+            panic!("Wrong result from usb host backend provider");
+        }
     }
 
-    pub fn attach_device(&self, bus: u8, addr: u8) -> Result<(u8)> {
-        let mut buf = [0; MSG_SIZE];
-        NativeEndian::write_u8(&mut buf[0..], Command::AttachDevice as u8);
-        NativeEndian::write_u8(&mut buf[1..], bus);
-        NativeEndian::write_u8(&mut buf[2..], addr);
-        handle_eintr!(self.sock.send(&buf))
-            .map(|_| ())
-            .map_err(Error::Io)?;
-
-        handle_eintr!(self.sock.recv(&mut buf))
-            .map(|_| ())
-            .map_err(Error::Io)?;
-        let port = NativeEndian::read_u8(&buf[0..]);
-        Ok(port)
+    pub fn list_device(&self, port: u8) -> MsgResult<(u16, u16)> {
+        self.sock.send(&Command::ListDevice{port})?;
+        let result = self.sock.recv()?;
+        if let CommandResult::
     }
-    pub fn detach_device(&self, port: u8) -> Result<()> {
-        let mut buf = [0; MSG_SIZE];
-        NativeEndian::write_u8(&mut buf[0..], Command::DetachDevice as u8);
-        NativeEndian::write_u8(&mut buf[1..], port);
-        handle_eintr!(self.sock.send(&buf))
-            .map(|_| ())
-            .map_err(Error::Io)
-    }
-
-    pub fn list_device(&self, port: u8) -> Result<(u16, u16)> {
-        let mut buf = [0; MSG_SIZE];
-        NativeEndian::write_u8(&mut buf[0..], Command::ListDevice as u8);
-        NativeEndian::write_u8(&mut buf[1..], port);
-        handle_eintr!(self.sock.send(&buf))
-            .map(|_| ())
-            .map_err(Error::Io)?;
-
-        handle_eintr!(self.sock.recv(&mut buf))
-            .map(|_| ())
-            .map_err(Error::Io)?;
-        let vid = NativeEndian::read_u16(&buf[0..]);
-        let pid = NativeEndian::read_u16(&buf[2..]);
-        Ok((vid, pid))
-    }
-}
+}*/
 
 /// ProviderInner listens to control socket.
 struct ProviderInner {
     ctx: Context,
-    sock: UnixDatagram,
+    sock: MsgSocket<UsbControlResult, UsbControlCommand>,
     usb_ports: Arc<Mutex<UsbPorts>>,
 }
 
 impl ProviderInner {
     fn new(
-        sock: UnixDatagram,
+        sock: MsgSocket<UsbControlResult, UsbControlCommand>,
         event_loop: EventLoop,
         ports: Arc<Mutex<UsbPorts>>,
     ) -> ProviderInner {
@@ -175,48 +148,40 @@ impl ProviderInner {
 
 impl EventHandler for ProviderInner {
     fn on_event(&self, fd: RawFd) {
-        let mut buf = [0; MSG_SIZE];
-        handle_eintr!(self.sock.recv(&mut buf))
-            .map(|_| ())
-            .map_err(Error::Io)?;
-        let cmd = NativeEndian::read_u8(&buf[0..]);
-        if cmd == Command::AttachDevice as u8 {
-            let bus = NativeEndian::read_u8(&buf[1..]);
-            let addr = NativeEndian::read_u8(&buf[2..]);
-
-            let device = self.ctx.get_device(bus, addr).unwrap();
-            let device = Arc::new(Mutex::new(HostDevice::new(device)));
-            let port = self
-                .usb_ports
-                .lock()
-                .unwrap()
-                .connect_backend(device)
-                .unwrap();
-            NativeEndian::write_u8(&mut buf[0..], port);
-            handle_eintr!(self.sock.send(&buf))
-                .map(|_| ())
-                .map_err(Error::Io)?;
-        } else if cmd == Command::DetachDevice as u8 {
-            let port = NativeEndian::read_u8(&buf[1..]);
-            self.usb_ports.lock().unwrap().disconnect_backend(port)
-        } else if cmd == Command::ListDevice as u8 {
-            let port = NativeEndian::read_u8(&buf[1..]);
-            let (vid, pid) = match self.get_backend_for_port(port) {
-                Some(device) => {
-                    let vid = device.lock().unwrap().get_vid();
-                    let pid = device.lock().unwrap().get_vid();
-                    (vid, pid)
+        let cmd = self.sock.recv().unwrap();
+        match cmd {
+            UsbControlCommand::AttachDevice{ bus, addr } => {
+                let device = self.ctx.get_device(bus, addr).unwrap();
+                let device = Arc::new(Mutex::new(HostDevice::new(device)));
+                let port = self
+                    .usb_ports
+                    .lock()
+                    .unwrap()
+                    .connect_backend(device);
+                match port {
+                    Some(port) => {
+                        self.sock.send(&UsbControlResult::Ok{port}).unwrap();
+                    },
+                    None => {
+                        self.sock.send(&UsbControlResult::NoAvailablePort).unwrap();
+                    }
                 }
-                None => (0, 0),
-            };
-
-            NativeEndian::write_u16(&mut buf[0..], vid);
-            NativeEndian::write_u16(&mut buf[2..], pid);
-            handle_eintr!(self.sock.send(&buf))
-                .map(|_| ())
-                .map_err(Error::Io)?;
-        } else {
-            panic!("error: Host device provider received unknown command");
-        }
+            },
+            UsbControlCommand::DetachDevice{ port } => {
+                self.usb_ports.lock().unwrap().disconnect_backend(port);
+                self.sock.send(&UsbControlResult::Ok{port}).unwrap();
+            },
+            UsbControlCommand::ListDevice{ port } => {
+                let result = match self.usb_ports.lock().unwrap().get_backend_for_port(port) {
+                    Some(device) => {
+                        let vid = device.lock().unwrap().get_vid();
+                        let pid = device.lock().unwrap().get_pid();
+                        UsbControlResult::Device{vid, pid}
+                    },
+                    _ => UsbControlResult::NoSuchDevice,
+                };
+                self.sock.send(&result).unwrap();
+            },
+        };
     }
 }
