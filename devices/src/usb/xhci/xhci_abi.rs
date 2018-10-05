@@ -155,6 +155,75 @@ impl Trb {
         TrbType::from_raw(self.get_trb_type())
     }
 
+    pub fn debug_str(&self) -> String {
+        match self.trb_type().unwrap() {
+            TrbType::Reserved => {
+                format!("reserved trb type")
+            },
+            TrbType::Normal =>  {
+                let t = self.cast::<NormalTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::SetupStage => {
+                let t = self.cast::<SetupStageTrb>();
+                format!("trb: {:?}", t)
+
+            },
+            TrbType::DataStage => {
+                let t = self.cast::<DataStageTrb>();
+                format!("trb: {:?}", t)
+
+            },
+            TrbType::StatusStage => {
+                let t = self.cast::<StatusStageTrb>();
+                format!("trb: {:?}", t)
+
+            },
+            TrbType::Isoch => {let t = self.cast::<IsochTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::Link => {let t = self.cast::<LinkTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::EventData => {let t = self.cast::<EventDataTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::Noop => {let t = self.cast::<NoopTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::EnableSlotCommand => {
+                format!("trb: enable slot command {:?}", self)
+            },
+            TrbType::DisableSlotCommand => {let t = self.cast::<DisableSlotCommandTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::AddressDeviceCommand => {let t = self.cast::<AddressDeviceCommandTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::ConfigureEndpointCommand => {let t = self.cast::<ConfigureEndpointCommandTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::EvaluateContextCommand => {let t = self.cast::<EvaluateContextCommandTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::ResetDeviceCommand => {let t = self.cast::<ResetDeviceCommandTrb>();
+                format!("trb: {:?}", t)
+            }
+            TrbType::NoopCommand => {
+                format!("trb: noop command {:?}", self)
+            },
+            TrbType::TransferEvent => {let t = self.cast::<TransferEventTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::CommandCompletionEvent => {let t = self.cast::<CommandCompletionEventTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::PortStatusChangeEvent =>{let t = self.cast::<PortStatusChangeEventTrb>();
+                format!("trb: {:?}", t)
+            }
+        }
+    }
+
     /// Get cycle bit.
     pub fn get_cycle_bit(&self) -> bool {
         self.get_cycle() != 0
@@ -169,16 +238,16 @@ impl Trb {
     }
 
     /// Get chain bit.
-    pub fn get_chain_bit(&self) -> Option<bool> {
+    pub fn get_chain_bit(&self) -> bool {
         match self.trb_type().unwrap() {
-            TrbType::Normal => Some(self.cast::<NormalTrb>().get_chain() != 0),
-            TrbType::DataStage => Some(self.cast::<DataStageTrb>().get_chain() != 0),
-            TrbType::StatusStage => Some(self.cast::<StatusStageTrb>().get_chain() != 0),
-            TrbType::Isoch => Some(self.cast::<IsochTrb>().get_chain() != 0),
-            TrbType::Noop => Some(self.cast::<NoopTrb>().get_chain() != 0),
-            TrbType::Link => Some(self.cast::<LinkTrb>().get_chain() != 0),
-            TrbType::EventData => Some(self.cast::<EventDataTrb>().get_chain() != 0),
-            _ => None,
+            TrbType::Normal => self.cast::<NormalTrb>().get_chain() != 0,
+            TrbType::DataStage => self.cast::<DataStageTrb>().get_chain() != 0,
+            TrbType::StatusStage => self.cast::<StatusStageTrb>().get_chain() != 0,
+            TrbType::Isoch => self.cast::<IsochTrb>().get_chain() != 0,
+            TrbType::Noop => self.cast::<NoopTrb>().get_chain() != 0,
+            TrbType::Link => self.cast::<LinkTrb>().get_chain() != 0,
+            TrbType::EventData => self.cast::<EventDataTrb>().get_chain() != 0,
+            _ => false,
         }
     }
 

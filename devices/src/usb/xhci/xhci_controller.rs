@@ -139,10 +139,10 @@ impl PciDevice for XhciController {
 
     fn write_bar(&mut self, addr: u64, data: &[u8]) {
         let bar0 = self.bar0;
-        debug!(
-            "xhci_controller: write_bar addr: {:x}, data: {:?}",
-            addr - bar0, data
-            );
+        // debug!(
+        //    "xhci_controller: write_bar addr: {:x}, data: {:?}",
+        //     addr - bar0, data
+        //    );
         if data.len() == 4 {
             let mut v: u64 = 0;
             v |= (data[0] as u64);

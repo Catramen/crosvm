@@ -59,11 +59,13 @@ impl DeviceSlots {
         }
     }
 
-    pub fn slot(&self, slot_id: u8) -> Option<MutexGuard<DeviceSlot>> {
-        if slot_id >= MAX_SLOTS as u8 {
+    pub fn slot(&self, slot_index: u8) -> Option<MutexGuard<DeviceSlot>> {
+        if slot_index >= MAX_SLOTS as u8 {
+            error!("trying to index an over large slot index {}, max slot = {}",
+                   slot_index, MAX_SLOTS);
             None
         } else {
-            Some(self.slots[slot_id as usize].lock().unwrap())
+            Some(self.slots[slot_index as usize].lock().unwrap())
         }
     }
 
@@ -173,7 +175,7 @@ impl DeviceSlot {
         return true;
     }
 
-    /// Enable the slot, return if it's successful.
+    /// Enable the slot, return if true it's successful.
     pub fn enable(&mut self) -> bool {
         if self.enabled {
             return false;

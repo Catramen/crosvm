@@ -55,13 +55,16 @@ impl RingBuffer {
             };
 
             td.push(addressed_trb);
-            if !addressed_trb.trb.get_chain_bit().unwrap() {
+            // <log
+            debug!("{}", &addressed_trb.trb.debug_str());
+            // log>
+            if addressed_trb.trb.get_chain_bit() {
                 break;
             }
         }
         // A valid transfer descriptor contains at least one addressed trb and the last trb has
         // chain bit != 0.
-        if td.len() == 0 || td.last().unwrap().trb.get_chain_bit().unwrap() {
+        if td.len() == 0 || td.last().unwrap().trb.get_chain_bit() {
             None
         } else {
             Some(td)
@@ -81,6 +84,8 @@ impl RingBuffer {
     // Read trb pointed by dequeue pointer. Does not proceed dequeue pointer.
     fn get_current_trb(&self) -> Option<AddressedTrb> {
         let trb: Trb = self.mem.read_obj_from_addr(self.dequeue_pointer).unwrap();
+        debug!("Try read trb from pointer: {:x}, read result {}", self.dequeue_pointer.0,
+               trb.debug_str());
         // If cycle bit of trb does not equal consumer cycle state, the ring is empty.
         // This trb is invalid.
         if trb.get_cycle_bit() != self.consumer_cycle_state {

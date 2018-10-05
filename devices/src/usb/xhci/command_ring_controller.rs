@@ -41,13 +41,16 @@ impl CommandRingTrbHandler {
         CommandRingTrbHandler { slots, interrupter }
     }
 
-    fn slot(&self, slot_id: u8) -> MutexGuard<DeviceSlot> {
-        self.slots.slot(slot_id).unwrap()
+    // Slot idex + 1= Slot id
+    fn slot(&self, slot_index: u8) -> MutexGuard<DeviceSlot> {
+        self.slots.slot(slot_index).unwrap()
     }
 
     fn enable_slot(&self, atrb: &AddressedTrb, event_fd: EventFd) {
+        debug!("running enable slot command ");
         for i in 0..MAX_SLOTS {
             if self.slot(i).enable() {
+            debug!("interrupt");
                 // Slot id starts from 1.
                 self.interrupter
                     .lock()
@@ -57,7 +60,9 @@ impl CommandRingTrbHandler {
                         i + 1,
                         GuestAddress(atrb.gpa),
                     );
+                debug!("beforeevent");
                 event_fd.write(1).unwrap();
+                debug!("after event");
                 return;
             }
         }
