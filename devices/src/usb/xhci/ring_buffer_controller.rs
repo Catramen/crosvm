@@ -47,7 +47,7 @@ where
     /// Create a ring buffer controller and add it to event loop.
     pub fn create_controller(
         mem: GuestMemory,
-        event_loop: &EventLoop,
+        event_loop: EventLoop,
         handler: T,
     ) -> Arc<RingBufferController<T>> {
         let evt = EventFd::new().unwrap();

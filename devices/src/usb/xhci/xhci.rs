@@ -12,6 +12,8 @@ use usb::xhci::device_slot::{DeviceSlot, DeviceSlots};
 use usb::xhci::usb_ports::UsbPorts;
 use usb::xhci::xhci_abi::Trb;
 use usb::xhci::xhci_regs::*;
+use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
+use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 
 /// xHCI controller implementation.
 pub struct Xhci {
@@ -20,24 +22,30 @@ pub struct Xhci {
     interrupter: Arc<Mutex<Interrupter>>,
     command_ring_controller: Arc<CommandRingController>,
     device_slots: DeviceSlots,
+    device_provider: HostBackendDeviceProvider,
 }
 
 impl Xhci {
     /// Create a new xHCI controller.
-    pub fn new(mem: GuestMemory, irq_evt: EventFd, regs: XHCIRegs) -> Arc<Self> {
+    pub fn new(mem: GuestMemory, device_provider: HostBackendDeviceProvider,
+               irq_evt: EventFd, regs: XHCIRegs) -> Arc<Self> {
         let (event_loop, join_handle) = EventLoop::start();
         let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), irq_evt, &regs)));
         let ports = Arc::new(Mutex::new(UsbPorts::new(&regs, interrupter.clone())));
+
+        let mut device_provider = device_provider;
+        device_provider.start(event_loop.clone(), ports.clone());
+
         let device_slots = DeviceSlots::new(
             regs.dcbaap.clone(),
-            ports,
+            ports.clone(),
             interrupter.clone(),
             event_loop.clone(),
             mem.clone(),
         );
         let command_ring_controller = CommandRingController::new(
             mem.clone(),
-            &event_loop,
+            event_loop.clone(),
             device_slots.clone(),
             interrupter.clone(),
         );
@@ -47,6 +55,7 @@ impl Xhci {
             interrupter: interrupter,
             command_ring_controller: command_ring_controller,
             device_slots: device_slots,
+            device_provider,
         });
         Self::init_reg_callbacks(&xhci);
         xhci

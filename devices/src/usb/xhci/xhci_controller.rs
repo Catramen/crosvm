@@ -14,6 +14,7 @@ use usb::xhci::mmio_space::MMIOSpace;
 use usb::xhci::xhci::Xhci;
 use usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XHCIRegs};
 use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
+use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 
 const XHCI_BAR0_SIZE: u64 = 0x10000;
 
@@ -33,6 +34,7 @@ pub struct XhciController {
     config_regs: PciConfiguration,
     mem: GuestMemory,
     bar0: u64, // bar0 in config_regs will be changed by guest. Not sure why.
+    device_provider: Option<HostBackendDeviceProvider>,
     irq_evt: Option<EventFd>,
     mmio: Option<MMIOSpace>,
     xhci: Option<Arc<Xhci>>,
@@ -54,6 +56,7 @@ impl XhciController {
         XhciController {
             config_regs,
             bar0: 0,
+            device_provider: Some(usb_provider),
             irq_evt: None,
             mmio: None,
             mem: mem,
@@ -70,6 +73,7 @@ impl XhciController {
         self.mmio = Some(mmio);
         self.xhci = Some(Xhci::new(
             self.mem.clone(),
+            self.device_provider.take().unwrap(),
             self.irq_evt.take().unwrap(),
             regs,
         ));
@@ -78,7 +82,8 @@ impl XhciController {
 
 impl PciDevice for XhciController {
     fn keep_fds(&self) -> Vec<RawFd> {
-        Vec::new()
+        let raw_fd = self.device_provider.as_ref().unwrap().keep_fds();
+        vec![raw_fd]
     }
     fn assign_irq(&mut self, irq_evt: EventFd, irq_num: u32, irq_pin: PciInterruptPin) {
         self.config_regs.set_irq(irq_num as u8, irq_pin);
@@ -117,11 +122,11 @@ impl PciDevice for XhciController {
 
     fn read_bar(&mut self, addr: u64, data: &mut [u8]) {
         let bar0 = self.bar0;
-        debug!("xhci_controller: read_bar addr: {:x}, data{:?}", addr - bar0, data);
+       // debug!("xhci_controller: read_bar addr: {:x}, data{:?}", addr - bar0, data);
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
-        self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
+       // self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
         debug!("xhci_controller: read_result {:?}", data);
         if data.len() == 4 {
             let mut v: u64 = 0;

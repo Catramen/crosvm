@@ -46,7 +46,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
 impl TransferRingController {
     pub fn new(
         mem: GuestMemory,
-        event_loop: &EventLoop,
+        event_loop: EventLoop,
         interrupter: Arc<Mutex<Interrupter>>,
         slot_id: u8,
         endpoint_id: u8,

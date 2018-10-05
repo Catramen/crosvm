@@ -141,9 +141,15 @@ impl ProxyDevice {
                 0 => {
                     {
                         let pid = process::id();
-                        let mut file = File::create(format!("{}.txt", pid)).unwrap();
+                        let mut file = File::create(format!("{}_stderr.txt", pid)).unwrap();
                         let fd = file.as_raw_fd();
                         dup2(fd, 2);
+                    }
+                    {
+                        let pid = process::id();
+                        let mut file = File::create(format!("{}_stdout.txt", pid)).unwrap();
+                        let fd = file.as_raw_fd();
+                        dup2(fd, 1);
                     }
                     device.on_sandboxed();
                     child_proc(child_sock, &mut device);

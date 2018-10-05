@@ -182,7 +182,7 @@ impl DeviceSlot {
         // Initialize the control endpoint.
         self.transfer_ring_controllers[0] = Some(TransferRingController::new(
             self.mem.clone(),
-            &self.event_loop,
+            self.event_loop.clone(),
             self.interrupter.clone(),
             self.slot_id,
             0,
@@ -453,7 +453,7 @@ impl DeviceSlot {
         let transfer_ring_index = (device_context_index - 1) as usize;
         let trc = TransferRingController::new(
             self.mem.clone(),
-            &self.event_loop,
+            self.event_loop.clone(),
             self.interrupter.clone(),
             self.slot_id,
             device_context_index,
