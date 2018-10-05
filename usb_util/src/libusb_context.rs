@@ -153,15 +153,16 @@ impl Iterator for DeviceIter {
 
     fn next(&mut self) -> Option<LibUsbDevice> {
         // Safe becuase 'self.list' is valid, the list is null terminated.
-        let current_ptr = unsafe { self.list.offset(self.index) };
-        if current_ptr.is_null() {
-            return None;
+        unsafe {
+            let current_ptr = self.list.offset(self.index);
+            if (*current_ptr).is_null() {
+                return None;
+            }
+            self.index += 1;
+            Some(
+                 LibUsbDevice::new(self.context.clone(), *current_ptr),
+                )
         }
-        self.index += 1;
-        Some(
-            // Safe because 'device' points to a valid memory.
-            unsafe { LibUsbDevice::new(self.context.clone(), *current_ptr) },
-        )
     }
 }
 
@@ -185,14 +186,16 @@ impl Iterator for PollFdIter {
 
     fn next(&mut self) -> Option<bindings::libusb_pollfd> {
         // Safe because 'self.index' never grow out of the null pointer index.
-        let current_ptr = unsafe { self.list.offset(self.index) };
-        if current_ptr.is_null() {
-            return None;
-        }
+        unsafe {
+            let current_ptr = self.list.offset(self.index);
+            if (*current_ptr).is_null() {
+                return None;
+            }
 
-        self.index += 1;
-        // Safe because 'current_ptr' is not null.
-        Some(unsafe { (**current_ptr).clone() })
+            self.index += 1;
+            // Safe because 'current_ptr' is not null.
+            Some((**current_ptr).clone())
+        }
     }
 }
 
