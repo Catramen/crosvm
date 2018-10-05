@@ -982,12 +982,14 @@ fn run_control(mut linux: RunnableLinuxVm,
                         match socket.recv() {
                             Ok(request) => {
                                 let mut running = true;
+                                debug!("Request: {:?}", request);
                                 let response =
                                     request.execute(&mut linux.vm,
                                                     &mut linux.resources,
                                                     &mut running,
                                                     &balloon_host_socket,
                                                     &usb_control_socket);
+                                debug!("Response: {:?}", response);
                                 if let Err(e) = socket.send(&response) {
                                     error!("failed to send VmResponse: {:?}", e);
                                 }

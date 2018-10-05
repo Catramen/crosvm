@@ -33,6 +33,7 @@ use kvm::{IoeventAddress, Vm};
 use msg_socket::{MsgOnSocket, MsgError, MsgResult, MsgSocket, MsgSender, MsgReceiver};
 
 /// A file descriptor either borrowed or owned by this.
+#[derive(Debug)]
 pub enum MaybeOwnedFd {
     /// Owned by this enum variant, and will be destructed automatically if not moved out.
     Owned(File),
@@ -64,14 +65,14 @@ impl MsgOnSocket for MaybeOwnedFd {
     }
 }
 
-#[derive(MsgOnSocket)]
+#[derive(MsgOnSocket, Debug)]
 pub enum UsbControlCommand {
     AttachDevice{bus: u8, addr: u8},
     DetachDevice{port: u8},
     ListDevice{port: u8},
 }
 
-#[derive(MsgOnSocket)]
+#[derive(MsgOnSocket, Debug)]
 pub enum UsbControlResult {
     Ok{port: u8},
     NoAvailablePort,
@@ -84,7 +85,7 @@ pub type UsbControlSocket = MsgSocket<UsbControlCommand, UsbControlResult>;
 /// A request to the main process to perform some operation on the VM.
 ///
 /// Unless otherwise noted, each request should expect a `VmResponse::Ok` to be received on success.
-#[derive(MsgOnSocket)]
+#[derive(MsgOnSocket, Debug)]
 pub enum VmRequest {
     /// Try to grow or shrink the VM's balloon.
     BalloonAdjust(i32),
@@ -225,7 +226,7 @@ impl VmRequest {
 /// Indication of success or failure of a `VmRequest`.
 ///
 /// Success is usually indicated `VmResponse::Ok` unless there is data associated with the response.
-#[derive(MsgOnSocket)]
+#[derive(MsgOnSocket, Debug)]
 pub enum VmResponse {
     /// Indicates the request was executed successfully.
     Ok,
