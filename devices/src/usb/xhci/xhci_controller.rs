@@ -126,15 +126,14 @@ impl PciDevice for XhciController {
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
-       // self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
-        debug!("xhci_controller: read_result {:?}", data);
+        self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
         if data.len() == 4 {
             let mut v: u64 = 0;
             v |= (data[0] as u64);
             v |= (data[1] as u64) << 8;
             v |= (data[2] as u64) << 16;
             v |= (data[3] as u64) << 24;
-            //debug!("xhci_controller: read_result_hex {:08x}", v);
+       //     debug!("xhci_controller: read_result_hex {:08x}", v);
         }
     }
 
