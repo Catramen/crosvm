@@ -6,6 +6,7 @@ use super::interrupter::Interrupter;
 use super::xhci_abi::*;
 use super::xhci_backend_device::XhciBackendDevice;
 use super::xhci_regs::MAX_INTERRUPTER;
+use super::usb_hub::UsbPort;
 use std::cmp::min;
 use std::sync::{Arc, Mutex};
 use sys_util::{EventFd, GuestMemory};
@@ -79,6 +80,7 @@ impl XhciTransferType {
 /// XhciBackendDevice.
 pub struct XhciTransfer {
     mem: GuestMemory,
+    port: Arc<UsbPort>,
     interrupter: Arc<Mutex<Interrupter>>,
     slot_id: u8,
     // id of endpoint in device slot.
@@ -92,6 +94,7 @@ impl XhciTransfer {
     /// Build a new XhciTransfer. Endpoint id is the id in xHCI device slot.
     pub fn new(
         mem: GuestMemory,
+        port: Arc<UsbPort>,
         interrupter: Arc<Mutex<Interrupter>>,
         slot_id: u8,
         endpoint_id: u8,
@@ -110,6 +113,7 @@ impl XhciTransfer {
         };
         XhciTransfer {
             mem,
+            port,
             interrupter,
             transfer_completion_event: completion_event,
             slot_id,
@@ -137,6 +141,11 @@ impl XhciTransfer {
 
     /// This functions should be invoked when transfer is completed (or failed).
     pub fn on_transfer_complete(&self, status: TransferStatus, bytes_transferred: u32) {
+        if let TransferStatus::NoDevice = status {
+            debug!("device disconnected, detaching from port");
+            self.port.detach();
+            return;
+        }
         self.transfer_completion_event.write(1);
         let mut edtla: u32 = 0;
         // TODO(jkwang) Send event based on Status.
@@ -181,10 +190,17 @@ impl XhciTransfer {
         }
     }
 
-    pub fn send_to_backend_if_valid(self, backend: &mut XhciBackendDevice) {
+    pub fn send_to_backend_if_valid(self) {
         if self.validate_transfer() {
             // Backend should invoke on transfer complete when transfer is completed.
-            backend.submit_transfer(self);
+            let port = self.port.clone();
+            let mut backend = port.get_backend_device();
+            if backend.is_none() {
+                error!("backend is already disconnected");
+                self.transfer_completion_event.write(1);
+                return;
+            }
+            backend.as_mut().unwrap().submit_transfer(self);
         } else {
             self.transfer_completion_event.write(1);
         }

@@ -37,4 +37,4 @@ pub mod scatter_gather_buffer;
 pub mod xhci_controller;
 pub mod xhci_backend_device_provider;
 #[allow(unused_imports, dead_code)]
-pub mod usb_ports;
+pub mod usb_hub;

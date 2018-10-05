@@ -18,7 +18,7 @@ use std::time::Duration;
 use byteorder::{LittleEndian, NativeEndian, ByteOrder};
 use super::host_device::HostDevice;
 use usb::event_loop::EventLoop;
-use usb::xhci::usb_ports::UsbPorts;
+use usb::xhci::usb_hub::UsbHub;
 use msg_socket::{MsgOnSocket, MsgError, MsgResult, MsgSocket, MsgReceiver, MsgSender};
 use vm_control::{UsbControlCommand, UsbControlResult, UsbControlSocket};
 
@@ -51,7 +51,7 @@ impl HostBackendDeviceProvider {
 }
 
 impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
-    fn start(&mut self, event_loop: EventLoop, ports: Arc<Mutex<UsbPorts>>) {
+    fn start(&mut self, event_loop: EventLoop, hub: Arc<UsbHub>) {
         if self.inner.is_some() {
             panic!("Host backend provider event loop is already set");
         }
@@ -59,7 +59,7 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
         let inner = Arc::new(ProviderInner::new(
             self.sock.take().unwrap(),
             event_loop.clone(),
-            ports,
+            hub,
         ));
         let handler: Arc<EventHandler> = inner.clone();
         event_loop.add_event(
@@ -79,19 +79,19 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
 struct ProviderInner {
     ctx: Context,
     sock: MsgSocket<UsbControlResult, UsbControlCommand>,
-    usb_ports: Arc<Mutex<UsbPorts>>,
+    usb_hub: Arc<UsbHub>,
 }
 
 impl ProviderInner {
     fn new(
         sock: MsgSocket<UsbControlResult, UsbControlCommand>,
         event_loop: EventLoop,
-        ports: Arc<Mutex<UsbPorts>>,
+        usb_hub: Arc<UsbHub>,
     ) -> ProviderInner {
         ProviderInner {
             ctx: Context::new(event_loop),
             sock,
-            usb_ports: ports,
+            usb_hub,
         }
     }
 }
@@ -102,12 +102,8 @@ impl EventHandler for ProviderInner {
         match cmd {
             UsbControlCommand::AttachDevice{ bus, addr } => {
                 let device = self.ctx.get_device(bus, addr).unwrap();
-                let device = Arc::new(Mutex::new(HostDevice::new(device)));
-                let port = self
-                    .usb_ports
-                    .lock()
-                    .unwrap()
-                    .connect_backend(device);
+                let device = Box::new(HostDevice::new(device));
+                let port = self.usb_hub.connect_backend(device);
                 match port {
                     Some(port) => {
                         self.sock.send(&UsbControlResult::Ok{port}).unwrap();
@@ -118,15 +114,25 @@ impl EventHandler for ProviderInner {
                 }
             },
             UsbControlCommand::DetachDevice{ port } => {
-                self.usb_ports.lock().unwrap().disconnect_backend(port);
-                self.sock.send(&UsbControlResult::Ok{port}).unwrap();
+                if self.usb_hub.disconnect_port(port) {
+                    self.sock.send(&UsbControlResult::Ok{port}).unwrap();
+                } else {
+                    self.sock.send(&UsbControlResult::NoSuchDevice).unwrap();
+                }
             },
             UsbControlCommand::ListDevice{ port } => {
-                let result = match self.usb_ports.lock().unwrap().get_backend_for_port(port) {
-                    Some(device) => {
-                        let vid = device.lock().unwrap().get_vid();
-                        let pid = device.lock().unwrap().get_pid();
-                        UsbControlResult::Device{vid, pid}
+                let result = match self.usb_hub.get_port(port) {
+                    Some(port) => {
+                        match *port.get_backend_device() {
+                            Some(ref device) => {
+                                let vid = device.get_vid();
+                                let pid = device.get_pid();
+                                UsbControlResult::Device{vid, pid}
+                            }
+                            None => {
+                                UsbControlResult::NoSuchDevice
+                            }
+                        }
                     },
                     _ => UsbControlResult::NoSuchDevice,
                 };

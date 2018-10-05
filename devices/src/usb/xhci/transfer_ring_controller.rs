@@ -12,17 +12,17 @@ use usb::xhci::ring_buffer_controller::{RingBufferController, TransferDescriptor
 use super::interrupter::Interrupter;
 use super::xhci::Xhci;
 use super::xhci_abi::TransferDescriptor;
-use super::xhci_backend_device::XhciBackendDevice;
+use super::usb_hub::UsbPort;
 use super::xhci_transfer::XhciTransfer;
 
 pub type TransferRingController = RingBufferController<TransferRingTrbHandler>;
 
 pub struct TransferRingTrbHandler {
     mem: GuestMemory,
+    port: Arc<UsbPort>,
     interrupter: Arc<Mutex<Interrupter>>,
     slot_id: u8,
     endpoint_id: u8,
-    backend: Arc<Mutex<XhciBackendDevice>>,
 }
 
 impl TransferDescriptorHandler for TransferRingTrbHandler {
@@ -33,24 +33,25 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
     ) {
         let xhci_transfer = XhciTransfer::new(
             self.mem.clone(),
+            self.port.clone(),
             self.interrupter.clone(),
             self.slot_id,
             self.endpoint_id,
             descriptor,
             completion_event,
         );
-        xhci_transfer.send_to_backend_if_valid(&mut *self.backend.lock().unwrap());
+        xhci_transfer.send_to_backend_if_valid();
     }
 }
 
 impl TransferRingController {
     pub fn new(
         mem: GuestMemory,
+        port: Arc<UsbPort>,
         event_loop: EventLoop,
         interrupter: Arc<Mutex<Interrupter>>,
         slot_id: u8,
         endpoint_id: u8,
-        backend: Arc<Mutex<XhciBackendDevice>>,
     ) -> Arc<TransferRingController> {
         RingBufferController::create_controller(
             mem.clone(),
@@ -60,7 +61,7 @@ impl TransferRingController {
                 interrupter,
                 slot_id,
                 endpoint_id,
-                backend,
+                port,
             },
         )
     }

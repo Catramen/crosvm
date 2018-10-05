@@ -9,7 +9,7 @@ use usb::auto_callback::AutoCallback;
 use usb::event_loop::EventLoop;
 use usb::xhci::command_ring_controller::CommandRingController;
 use usb::xhci::device_slot::{DeviceSlot, DeviceSlots};
-use usb::xhci::usb_ports::UsbPorts;
+use usb::xhci::usb_hub::UsbHub;
 use usb::xhci::xhci_abi::Trb;
 use usb::xhci::xhci_regs::*;
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
@@ -31,14 +31,14 @@ impl Xhci {
                irq_evt: EventFd, regs: XHCIRegs) -> Arc<Self> {
         let (event_loop, join_handle) = EventLoop::start();
         let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), irq_evt, &regs)));
-        let ports = Arc::new(Mutex::new(UsbPorts::new(&regs, interrupter.clone())));
+        let hub = Arc::new(UsbHub::new(&regs, interrupter.clone()));
 
         let mut device_provider = device_provider;
-        device_provider.start(event_loop.clone(), ports.clone());
+        device_provider.start(event_loop.clone(), hub.clone());
 
         let device_slots = DeviceSlots::new(
             regs.dcbaap.clone(),
-            ports.clone(),
+            hub.clone(),
             interrupter.clone(),
             event_loop.clone(),
             mem.clone(),

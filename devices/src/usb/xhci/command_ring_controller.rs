@@ -50,7 +50,6 @@ impl CommandRingTrbHandler {
         debug!("running enable slot command ");
         for i in 0..MAX_SLOTS {
             if self.slot(i).enable() {
-            debug!("interrupt");
                 // Slot id starts from 1.
                 self.interrupter
                     .lock()
@@ -60,9 +59,7 @@ impl CommandRingTrbHandler {
                         i + 1,
                         GuestAddress(atrb.gpa),
                     );
-                debug!("beforeevent");
                 event_fd.write(1).unwrap();
-                debug!("after event");
                 return;
             }
         }
