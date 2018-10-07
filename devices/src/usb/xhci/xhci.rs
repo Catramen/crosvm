@@ -29,7 +29,7 @@ impl Xhci {
     /// Create a new xHCI controller.
     pub fn new(mem: GuestMemory, device_provider: HostBackendDeviceProvider,
                irq_evt: EventFd, regs: XHCIRegs) -> Arc<Self> {
-        let (event_loop, join_handle) = EventLoop::start();
+        let (event_loop, _join_handle) = EventLoop::start();
         let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), irq_evt, &regs)));
         let hub = Arc::new(UsbHub::new(&regs, interrupter.clone()));
 
@@ -63,28 +63,26 @@ impl Xhci {
 
     fn init_reg_callbacks(xhci: &Arc<Xhci>) {
         let xhci_weak = Arc::downgrade(xhci);
-
-        let xhci_weak0 = xhci_weak.clone();
         xhci.regs.usbcmd.set_write_cb(move |val: u32| {
-            xhci_weak0.upgrade().unwrap().usbcmd_callback(val)
+            xhci_weak.upgrade().unwrap().usbcmd_callback(val)
         });
 
-        let xhci_weak0 = xhci_weak.clone();
+        let xhci_weak = Arc::downgrade(xhci);
         xhci.regs
             .crcr
-            .set_write_cb(move |val: u64| xhci_weak0.upgrade().unwrap().crcr_callback(val));
+            .set_write_cb(move |val: u64| xhci_weak.upgrade().unwrap().crcr_callback(val));
 
         for i in 0..xhci.regs.portsc.len() {
-            let xhci_weak0 = xhci_weak.clone();
+            let xhci_weak = Arc::downgrade(xhci);
             xhci.regs.portsc[i].set_write_cb(move |val: u32| {
-                xhci_weak0.upgrade().unwrap().portsc_callback(i as u32, val)
+                xhci_weak.upgrade().unwrap().portsc_callback(i as u32, val)
             });
         }
 
         for i in 0..xhci.regs.doorbells.len() {
-            let xhci_weak0 = xhci_weak.clone();
+            let xhci_weak = Arc::downgrade(xhci);
             xhci.regs.doorbells[i].set_write_cb(move |val: u32| {
-                xhci_weak0
+                xhci_weak
                     .upgrade()
                     .unwrap()
                     .doorbell_callback(i as u32, val);
@@ -92,43 +90,35 @@ impl Xhci {
             });
         }
 
-        let xhci_weak0 = xhci_weak.clone();
+        let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.iman.set_write_cb(move |val: u32| {
-            xhci_weak0.upgrade().unwrap().iman_callback(val);
+            xhci_weak.upgrade().unwrap().iman_callback(val);
             val
         });
 
-        let xhci_weak0 = xhci_weak.clone();
+        let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.imod.set_write_cb(move |val: u32| {
-            xhci_weak0.upgrade().unwrap().imod_callback(val);
+            xhci_weak.upgrade().unwrap().imod_callback(val);
             val
         });
 
-        let xhci_weak0 = xhci_weak.clone();
+        let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.erstsz.set_write_cb(move |val: u32| {
-            xhci_weak0.upgrade().unwrap().erstsz_callback(val);
+            xhci_weak.upgrade().unwrap().erstsz_callback(val);
             val
         });
 
-        let xhci_weak0 = xhci_weak.clone();
+        let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.erstba.set_write_cb(move |val: u64| {
-            xhci_weak0.upgrade().unwrap().erstba_callback(val);
+            xhci_weak.upgrade().unwrap().erstba_callback(val);
             val
         });
 
-        let xhci_weak0 = xhci_weak.clone();
+        let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.erdp.set_write_cb(move |val: u64| {
-            xhci_weak0.upgrade().unwrap().erdp_callback(val);
+            xhci_weak.upgrade().unwrap().erdp_callback(val);
             val
         });
-    }
-    /// Get the guest memory.
-    pub fn guest_mem(&self) -> &GuestMemory {
-        &self.mem
-    }
-
-    pub fn send_event(&self, trb: Trb) {
-        self.interrupter.lock().unwrap().add_event(trb);
     }
 
     // Callback for usbcmd register write.
@@ -202,9 +192,11 @@ impl Xhci {
                 if target != 0 || stream_id != 0 {
                     return;
                 }
+                debug!("doorbell to command ring");
                 self.regs.crcr.set_bits(CRCR_COMMAND_RING_RUNNING);
                 self.command_ring_controller.start();
             } else {
+                debug!("doorbell to device slot");
                 self.device_slots
                     .slot(index as u8)
                     .unwrap()
@@ -265,7 +257,6 @@ impl Xhci {
     fn reset(&self) {
         self.regs.usbsts.set_bits(USB_STS_CONTROLLER_NOT_READY);
         let usbsts = self.regs.usbsts.clone();
-        let usbcmd = self.regs.usbcmd.clone();
         self.device_slots.stop_all_and_reset(move || {
             usbsts.clear_bits(USB_STS_CONTROLLER_NOT_READY);
         });

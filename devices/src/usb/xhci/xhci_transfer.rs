@@ -146,7 +146,7 @@ impl XhciTransfer {
             self.port.detach();
             return;
         }
-        self.transfer_completion_event.write(1);
+        self.transfer_completion_event.write(1).unwrap();
         let mut edtla: u32 = 0;
         // TODO(jkwang) Send event based on Status.
         // As noted in xHCI spec 4.11.3.1
@@ -161,29 +161,38 @@ impl XhciTransfer {
                 // For details about event data trb and EDTLA, see spec 4.11.5.2.
                 if atrb.trb.trb_type().unwrap() == TrbType::EventData {
                     let tlength: u32 = min(edtla, bytes_transferred);
-                    self.send_transfer_event_trb(
-                        TrbCompletionCode::Success,
-                        atrb.trb.cast::<EventDataTrb>().get_event_data(),
-                        tlength,
-                        true,
-                    );
+                    self.interrupter.lock().unwrap()
+                        .send_transfer_event_trb(
+                            TrbCompletionCode::Success,
+                            atrb.trb.cast::<EventDataTrb>().get_event_data(),
+                            tlength,
+                            true,
+                            self.slot_id,
+                            self.endpoint_id,
+                            );
                 } else {
                     // For Short Transfer details, see xHCI spec 4.10.1.1.
                     let residual_transfer_length: u32 = edtla - bytes_transferred;
                     if edtla > bytes_transferred {
-                        self.send_transfer_event_trb(
-                            TrbCompletionCode::ShortPacket,
-                            atrb.gpa,
-                            residual_transfer_length,
-                            true,
-                        );
+                        self.interrupter.lock().unwrap()
+                            .send_transfer_event_trb(
+                                TrbCompletionCode::ShortPacket,
+                                atrb.gpa,
+                                residual_transfer_length,
+                                true,
+                                self.slot_id,
+                                self.endpoint_id,
+                                );
                     } else {
-                        self.send_transfer_event_trb(
-                            TrbCompletionCode::Success,
-                            atrb.gpa,
-                            residual_transfer_length,
-                            true,
-                        );
+                        self.interrupter.lock().unwrap()
+                            .send_transfer_event_trb(
+                                TrbCompletionCode::Success,
+                                atrb.gpa,
+                                residual_transfer_length,
+                                true,
+                                self.slot_id,
+                                self.endpoint_id,
+                                );
                     }
                 }
             }
@@ -197,12 +206,12 @@ impl XhciTransfer {
             let mut backend = port.get_backend_device();
             if backend.is_none() {
                 error!("backend is already disconnected");
-                self.transfer_completion_event.write(1);
+                self.transfer_completion_event.write(1).unwrap();
                 return;
             }
             backend.as_mut().unwrap().submit_transfer(self);
         } else {
-            self.transfer_completion_event.write(1);
+            self.transfer_completion_event.write(1).unwrap();
         }
     }
 
@@ -212,7 +221,10 @@ impl XhciTransfer {
         let mut valid = true;
         for atrb in &self.transfer_trbs {
             if !Self::trb_is_valid(&atrb) {
-                self.send_transfer_event_trb(TrbCompletionCode::TrbError, atrb.gpa, 0, false);
+                self.interrupter.lock().unwrap()
+                    .send_transfer_event_trb(TrbCompletionCode::TrbError, atrb.gpa, 0, false,
+                                self.slot_id,
+                                self.endpoint_id,);
                 valid = false;
             }
         }
@@ -221,26 +233,5 @@ impl XhciTransfer {
 
     fn trb_is_valid(atrb: &AddressedTrb) -> bool {
         atrb.trb.can_be_in_transfer_ring() && (atrb.trb.interrupter_target() < MAX_INTERRUPTER)
-    }
-
-    fn send_transfer_event_trb(
-        &self,
-        completion_code: TrbCompletionCode,
-        trb_pointer: u64,
-        transfer_length: u32,
-        event_data: bool,
-    ) {
-        let mut trb = Trb::new();
-        {
-            let event_trb = trb.cast_mut::<TransferEventTrb>();
-            event_trb.set_trb_pointer(trb_pointer);
-            event_trb.set_trb_transfer_length(transfer_length);
-            event_trb.set_completion_code(completion_code as u8);
-            event_trb.set_event_data(event_data.into());
-            event_trb.set_trb_type(TrbType::TransferEvent as u8);
-            event_trb.set_endpoint_id(self.endpoint_id);
-            event_trb.set_slot_id(self.slot_id);
-        }
-        self.interrupter.lock().unwrap().add_event(trb);
     }
 }

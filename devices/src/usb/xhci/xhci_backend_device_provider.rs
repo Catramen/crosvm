@@ -2,10 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use super::xhci_backend_device::XhciBackendDevice;
 use super::usb_hub::UsbHub;
 use usb::event_loop::EventLoop;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::os::unix::io::RawFd;
 
 /// Xhci backend provider will run on an EventLoop and connect new devices to usb ports.

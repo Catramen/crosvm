@@ -8,11 +8,11 @@ use pci::{
 };
 use resources::SystemAllocator;
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex};
-use sys_util::{EventFd, GuestAddress, GuestMemory};
+use std::sync::Arc;
+use sys_util::{EventFd, GuestMemory};
 use usb::xhci::mmio_space::MMIOSpace;
 use usb::xhci::xhci::Xhci;
-use usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XHCIRegs};
+use usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs};
 use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 
@@ -52,7 +52,6 @@ impl XhciController {
             0,
             0,
         );
-        let class_code_reg = config_regs.read_reg(2);
         XhciController {
             config_regs,
             bar0: 0,
@@ -65,7 +64,7 @@ impl XhciController {
     }
 
     pub fn init_when_forked(&mut self) {
-        if (self.mmio.is_some()) {
+        if self.mmio.is_some() {
             debug!("xhci controller is already inited");
             return;
         }
@@ -127,14 +126,14 @@ impl PciDevice for XhciController {
             return;
         }
         self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
-        if data.len() == 4 {
+       /* if data.len() == 4 {
             let mut v: u64 = 0;
-            v |= (data[0] as u64);
+            v |= data[0] as u64;
             v |= (data[1] as u64) << 8;
             v |= (data[2] as u64) << 16;
             v |= (data[3] as u64) << 24;
-       //     debug!("xhci_controller: read_result_hex {:08x}", v);
-        }
+            debug!("xhci_controller: read_result_hex {:08x}", v);
+        }*/
     }
 
     fn write_bar(&mut self, addr: u64, data: &[u8]) {
@@ -143,14 +142,16 @@ impl PciDevice for XhciController {
         //    "xhci_controller: write_bar addr: {:x}, data: {:?}",
         //     addr - bar0, data
         //    );
+        /*
         if data.len() == 4 {
             let mut v: u64 = 0;
-            v |= (data[0] as u64);
+            v |= data[0] as u64;
             v |= (data[1] as u64) << 8;
             v |= (data[2] as u64) << 16;
             v |= (data[3] as u64) << 24;
-        //    debug!("xhci_controller: write_value_hex {:08x}", v);
+            debug!("xhci_controller: write_value_hex {:08x}", v);
         }
+        */
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }

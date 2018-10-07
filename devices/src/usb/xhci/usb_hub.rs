@@ -144,6 +144,7 @@ impl UsbHub {
 
     /// Connect backend to next empty port.
     pub fn connect_backend(&self, backend: Box<XhciBackendDevice>) -> Option<u8> {
+        debug!("Trying to connect backend to hub");
         for i in 0..self.ports.len() {
             if (*self.ports[i].get_backend_device()).is_none() {
                 self.ports[i].attach(backend);

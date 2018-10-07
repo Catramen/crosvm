@@ -5,7 +5,7 @@
 use sys_util::{EventFd, PollContext, WatchingEvents};
 use std::collections::HashMap;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::{mpsc, Weak, Mutex};
+use std::sync::{mpsc, Weak};
 use std::thread;
 
 /// EpollEventLoop is an event loop blocked on a set of fds. When a monitered events is triggered,
@@ -108,7 +108,7 @@ impl EventLoop {
 
     /// Removes event for this RawFd.
     pub fn remove_event_for_fd(&self, fd: RawFd) {
-        /// Simply do nothing if the event loop is stopped.
+        // Simply do nothing if the event loop is stopped.
         let _ = self.cmd_tx.send(EpollThreadEvents::DeleteFd(fd));
         let _ = self.cmd_evt.write(1);
     }

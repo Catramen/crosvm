@@ -113,7 +113,7 @@ where
     T: 'static + TransferDescriptorHandler,
 {
     fn drop(&mut self) {
-        /// Remove self from the event loop.
+        // Remove self from the event loop.
         self.event_loop
             .lock()
             .unwrap()
@@ -138,6 +138,7 @@ where
             if *state == RingBufferState::Stopped {
                 return;
             } else if *state == RingBufferState::Stopping || transfer_descriptor.is_none() {
+                debug!("No transfer descriptor, stoping ring buffer controller");
                 *state = RingBufferState::Stopped;
                 self.stop_callback.lock().unwrap().clear();
                 return;

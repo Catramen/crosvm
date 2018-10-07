@@ -40,7 +40,6 @@ impl UsbEndpoint {
             warn!("Endpoint type is not supporetd");
             transfer.on_transfer_complete(TransferStatus::Error, 0);
         }
-
         match transfer.get_transfer_type() {
             XhciTransferType::Normal(buffer) => {
                 self.handle_bulk_transfer(transfer, buffer);
@@ -54,6 +53,8 @@ impl UsbEndpoint {
 
     fn handle_bulk_transfer(&self, transfer: XhciTransfer, buffer: ScatterGatherBuffer) {
         let mut bulk_transfer = bulk_transfer(self.endpoint_number, 0, buffer.len());
+        let transfer = Arc::new(transfer);
+        let tmp_transfer = transfer.clone();
         match self.direction {
             EndpointDirection::In => {
                 // Read data from ScatterGatherBuffer to a continuous memory.
@@ -63,7 +64,13 @@ impl UsbEndpoint {
                     let actual_length = t.actual_length();
                     transfer.on_transfer_complete(status, actual_length as u32);
                 });
-                self.device_handle.lock().unwrap().submit_async_transfer(bulk_transfer);
+                match self.device_handle.lock().unwrap().submit_async_transfer(bulk_transfer) {
+                    Err((e, _t)) => {
+                        error!("fail to submit bulk transfer {:?}", e);
+                        tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
+                    },
+                    _ =>{},
+                }
             },
             EndpointDirection::Out => {
                 bulk_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
@@ -79,7 +86,13 @@ impl UsbEndpoint {
                     };
                     transfer.on_transfer_complete(status, actual_length as u32);
                 });
-                self.device_handle.lock().unwrap().submit_async_transfer(bulk_transfer);
+                match self.device_handle.lock().unwrap().submit_async_transfer(bulk_transfer) {
+                    Err((e, _t)) => {
+                        error!("fail to submit bulk transfer {:?}", e);
+                        tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
+                    },
+                    _ =>{},
+                }
             },
             _ => {
                 error!("Wrong direction for bulk endpoint");

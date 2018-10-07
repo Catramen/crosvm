@@ -7,7 +7,6 @@
 use libc::{pid_t, dup2};
 use std::fs::File;
 
-use std::env;
 use std::{self, fmt, io};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixDatagram;
@@ -145,12 +144,12 @@ impl ProxyDevice {
                         let fd = file.as_raw_fd();
                         dup2(fd, 2);
                     }
-                    {
-                        let pid = process::id();
-                        let mut file = File::create(format!("{}_stdout.txt", pid)).unwrap();
-                        let fd = file.as_raw_fd();
-                        dup2(fd, 1);
-                    }
+                   // {
+                   //     let pid = process::id();
+                   //     let mut file = File::create(format!("{}_stdout.txt", pid)).unwrap();
+                   //     let fd = file.as_raw_fd();
+                   //     dup2(fd, 1);
+                   // }
                     device.on_sandboxed();
                     child_proc(child_sock, &mut device);
                     // ! Never returns

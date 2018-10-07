@@ -2,24 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use super::context::Context;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixDatagram;
-use std::{self, fmt, io};
 use sys_util::WatchingEvents;
 use usb::event_loop::EventHandler;
-use usb::xhci::xhci_backend_device::{UsbDeviceAddress, XhciBackendDevice};
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
-use usb_util::libusb_context::LibUsbContext;
-use usb_util::libusb_device::LibUsbDevice;
 use std::time::Duration;
-use byteorder::{LittleEndian, NativeEndian, ByteOrder};
 use super::host_device::HostDevice;
 use usb::event_loop::EventLoop;
 use usb::xhci::usb_hub::UsbHub;
-use msg_socket::{MsgOnSocket, MsgError, MsgResult, MsgSocket, MsgReceiver, MsgSender};
+use msg_socket::{MsgSocket, MsgReceiver, MsgSender};
 use vm_control::{UsbControlCommand, UsbControlResult, UsbControlSocket};
 
 const SOCKET_TIMEOUT_MS: u64 = 2000;
@@ -97,7 +92,7 @@ impl ProviderInner {
 }
 
 impl EventHandler for ProviderInner {
-    fn on_event(&self, fd: RawFd) {
+    fn on_event(&self, _fd: RawFd) {
         let cmd = self.sock.recv().unwrap();
         match cmd {
             UsbControlCommand::AttachDevice{ bus, addr } => {

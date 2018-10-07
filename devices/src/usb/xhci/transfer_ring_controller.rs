@@ -31,6 +31,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
         descriptor: TransferDescriptor,
         completion_event: EventFd,
     ) {
+        debug!("handling transfer descriptor in TransferRingController");
         let xhci_transfer = XhciTransfer::new(
             self.mem.clone(),
             self.port.clone(),

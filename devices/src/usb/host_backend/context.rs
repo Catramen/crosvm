@@ -63,7 +63,7 @@ struct LibUsbEventHandler {
 }
 
 impl EventHandler for LibUsbEventHandler {
-    fn on_event(&self, fd: RawFd) {
+    fn on_event(&self, _fd: RawFd) {
         self.context.handle_events_nonblock();
     }
 }
