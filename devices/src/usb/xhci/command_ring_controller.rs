@@ -75,6 +75,7 @@ impl CommandRingTrbHandler {
     }
 
     fn disable_slot(&self, atrb: &AddressedTrb, event_fd: EventFd) {
+        debug!("disabling slot");
         let trb = atrb.trb.cast::<DisableSlotCommandTrb>();
         let slot_id = trb.get_slot_id();
         if slot_id < MAX_SLOTS {
@@ -93,6 +94,7 @@ impl CommandRingTrbHandler {
     }
 
     fn address_device(&self, atrb: &AddressedTrb, event_fd: EventFd) {
+        debug!("addressing device");
         let trb = atrb.trb.cast::<AddressDeviceCommandTrb>();
         let slot_id = trb.get_slot_id();
         if slot_id < MAX_SLOTS {
@@ -118,6 +120,7 @@ impl CommandRingTrbHandler {
     }
 
     fn configure_endpoint(&self, atrb: &AddressedTrb, event_fd: EventFd) {
+        debug!("configuring endpoint");
         let trb = atrb.trb.cast::<ConfigureEndpointCommandTrb>();
         let slot_id = trb.get_slot_id();
         if slot_id < MAX_SLOTS {
@@ -143,9 +146,11 @@ impl CommandRingTrbHandler {
     }
 
     fn evaluate_context(&self, atrb: &AddressedTrb, event_fd: EventFd) {
+        debug!("evaluating context");
         let trb = atrb.trb.cast::<EvaluateContextCommandTrb>();
         let slot_id = trb.get_slot_id();
         if slot_id < MAX_SLOTS {
+            debug!("evaluating context for slot: {}", slot_id);
             self.interrupter
                 .lock()
                 .unwrap()
@@ -168,6 +173,7 @@ impl CommandRingTrbHandler {
     }
 
     fn reset_device(&self, atrb: &AddressedTrb, event_fd: EventFd) {
+        debug!("reseting device");
         let trb = atrb.trb.cast::<ResetDeviceCommandTrb>();
         let slot_id = trb.get_slot_id();
         if slot_id < MAX_SLOTS {
@@ -208,7 +214,7 @@ impl TransferDescriptorHandler for CommandRingTrbHandler {
                         0,
                         GuestAddress(atrb.gpa),
                     );
-                complete_event.write(1);
+                complete_event.write(1).unwrap();
             }
             _ => warn!(
                 "Unexpected command ring trb type: {}",

@@ -54,6 +54,7 @@ impl HostDevice {
             // before last transfer is handled.
             panic!("Last control transfer has not yet finished.");
         }
+        let transfer = Arc::new(transfer);
         match transfer.get_transfer_type() {
             XhciTransferType::SetupStage(setup) => {
                 if self.ctl_ep_state != ControlEndpointState::StatusStage {
@@ -71,13 +72,20 @@ impl HostDevice {
                     ControlRequestDataPhaseTransferDirection::DeviceToHost {
                         let mut control_transfer = locked.take().unwrap();
                         let myct = self.control_transfer.clone();
+                        let tmp_transfer = transfer.clone();
                         control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
                             let status = t.status();
                             let actual_length = t.actual_length();
                             (*myct.lock().unwrap()) = Some(t);
                             transfer.on_transfer_complete(status, actual_length as u32);
                         });
-                        self.device_handle.submit_async_transfer(control_transfer);
+                        match self.device_handle.submit_async_transfer(control_transfer) {
+                            Err((e, _t)) => {
+                                error!("fail to submit control transfer {:?}", e);
+                                tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
+                            },
+                            _ => {},
+                        }
                 } else {
                     transfer.on_transfer_complete(TransferStatus::Completed, 0);
                 }
@@ -133,13 +141,22 @@ impl HostDevice {
                         let mut locked = self.control_transfer.lock().unwrap();
                         let mut control_transfer = locked.take().unwrap();
                         let myct = self.control_transfer.clone();
+                        let tmp_transfer = transfer.clone();
                         control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
                             let status = t.status();
-                            let actual_length = t.actual_length();
+                            // Use actual length soon.
+                            let _actual_length = t.actual_length();
                             (*myct.lock().unwrap()) = Some(t);
                             transfer.on_transfer_complete(status, 0);
                         });
-                        self.device_handle.submit_async_transfer(control_transfer);
+                        match self.device_handle.submit_async_transfer(control_transfer) {
+                            Err((e, _t)) => {
+                                error!("fail to submit control transfer {:?}", e);
+                                tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
+                            },
+
+                            _ =>{},
+                        }
 
                     },
                     Some(ControlRequestDataPhaseTransferDirection::DeviceToHost) => {
@@ -184,7 +201,9 @@ impl HostDevice {
                     return None;
         }
         // It's a standard, set_address, device request. We do nothing here.
+        unsafe {
         debug!("Set address control transfer is received with address: {}", request_setup.value);
+        }
         Some(TransferStatus::Completed)
     }
 
@@ -231,7 +250,7 @@ impl HostDevice {
         // It's a standard, clear_feature, endpoint request.
         const STD_FEATURE_ENDPOINT_HALT: u16 = 0;
         if request_setup.value == STD_FEATURE_ENDPOINT_HALT {
-            self.device_handle.clear_halt(request_setup.index as u8);
+            self.device_handle.clear_halt(request_setup.index as u8).unwrap();
         }
         Some(TransferStatus::Completed)
     }

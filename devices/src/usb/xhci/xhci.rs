@@ -29,7 +29,7 @@ impl Xhci {
     /// Create a new xHCI controller.
     pub fn new(mem: GuestMemory, device_provider: HostBackendDeviceProvider,
                irq_evt: EventFd, regs: XHCIRegs) -> Arc<Self> {
-        let (event_loop, join_handle) = EventLoop::start();
+        let (event_loop, _join_handle) = EventLoop::start();
         let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), irq_evt, &regs)));
         let hub = Arc::new(UsbHub::new(&regs, interrupter.clone()));
 
@@ -122,14 +122,6 @@ impl Xhci {
             val
         });
     }
-    /// Get the guest memory.
-    pub fn guest_mem(&self) -> &GuestMemory {
-        &self.mem
-    }
-
-    pub fn send_event(&self, trb: Trb) {
-        self.interrupter.lock().unwrap().add_event(trb);
-    }
 
     // Callback for usbcmd register write.
     fn usbcmd_callback(&self, value: u32) -> u32 {
@@ -202,9 +194,11 @@ impl Xhci {
                 if target != 0 || stream_id != 0 {
                     return;
                 }
+                debug!("doorbell to command ring");
                 self.regs.crcr.set_bits(CRCR_COMMAND_RING_RUNNING);
                 self.command_ring_controller.start();
             } else {
+                debug!("doorbell to device slot");
                 self.device_slots
                     .slot(index as u8)
                     .unwrap()
@@ -265,7 +259,6 @@ impl Xhci {
     fn reset(&self) {
         self.regs.usbsts.set_bits(USB_STS_CONTROLLER_NOT_READY);
         let usbsts = self.regs.usbsts.clone();
-        let usbcmd = self.regs.usbcmd.clone();
         self.device_slots.stop_all_and_reset(move || {
             usbsts.clear_bits(USB_STS_CONTROLLER_NOT_READY);
         });

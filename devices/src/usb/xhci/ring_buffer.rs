@@ -54,11 +54,10 @@ impl RingBuffer {
                 None => panic!("Crash due to unknown bug"),
             };
 
+            debug!("adding trb to td {}", &addressed_trb.trb.debug_str());
             td.push(addressed_trb);
-            // <log
-            debug!("{}", &addressed_trb.trb.debug_str());
-            // log>
-            if addressed_trb.trb.get_chain_bit() {
+            if !addressed_trb.trb.get_chain_bit() {
+                debug!("trb chain is false returning");
                 break;
             }
         }
@@ -84,8 +83,6 @@ impl RingBuffer {
     // Read trb pointed by dequeue pointer. Does not proceed dequeue pointer.
     fn get_current_trb(&self) -> Option<AddressedTrb> {
         let trb: Trb = self.mem.read_obj_from_addr(self.dequeue_pointer).unwrap();
-        debug!("Try read trb from pointer: {:x}, read result {}", self.dequeue_pointer.0,
-               trb.debug_str());
         // If cycle bit of trb does not equal consumer cycle state, the ring is empty.
         // This trb is invalid.
         if trb.get_cycle_bit() != self.consumer_cycle_state {

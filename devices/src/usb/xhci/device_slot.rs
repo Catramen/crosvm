@@ -70,9 +70,11 @@ impl DeviceSlots {
     }
 
     pub fn stop_all_and_reset<C: Fn() + 'static + Send>(&self, callback: C) {
+        debug!("stoping all device slots and reset host hub");
         let slots = self.slots.clone();
         let hub = self.hub.clone();
         let auto_callback = AutoCallback::new(move || {
+            debug!("executing stop device slot callback");
             for slot in &slots {
                 slot.lock().unwrap().reset();
                 hub.reset();
@@ -121,7 +123,7 @@ impl DeviceSlot {
         mem: GuestMemory,
     ) -> Self {
         let mut transfer_ring_controllers = Vec::new();
-        for i in 0..TOTAL_TRANSFER_RING_CONTROLLERS {
+        for _i in 0..TOTAL_TRANSFER_RING_CONTROLLERS {
             transfer_ring_controllers.push(None);
         }
         DeviceSlot {
@@ -149,7 +151,7 @@ impl DeviceSlot {
     ///
     /// The stream ID must be zero for endpoints that do not have streams
     /// configured.
-    pub fn ring_doorbell(&self, target: usize, stream_id: u16) -> bool {
+    pub fn ring_doorbell(&self, target: usize, _stream_id: u16) -> bool {
         if target < 1 || target > 31 {
             error!(
                 "Invalid target written to doorbell register. target: {}",
@@ -157,7 +159,7 @@ impl DeviceSlot {
             );
             return false;
         }
-
+        debug!("ding-dong. who is that?");
         let i = target - 1;
         let transfer_ring_controller = match self.transfer_ring_controllers[i].as_ref() {
             Some(tr) => tr,
@@ -185,10 +187,12 @@ impl DeviceSlot {
     }
 
     pub fn disable(slot: &Arc<Mutex<DeviceSlot>>, atrb: &AddressedTrb, event_fd: EventFd) {
+        debug!("device slot is being disabled");
         let s = slot.lock().unwrap();
         let gpa = atrb.gpa;
         let slot_id = s.slot_id;
         if s.enabled {
+            debug!("being disabled.");
             let interrupter = s.interrupter.clone();
             let slot_weak = Arc::downgrade(slot);
             let auto_callback = AutoCallback::new(move || {
@@ -200,6 +204,7 @@ impl DeviceSlot {
                     .set_state(DeviceSlotState::DisabledOrEnabled);
                 slot.set_device_context(device_context);
                 slot.reset();
+                debug!("all trc disabled, sending trb");
                 interrupter.lock().unwrap().send_command_completion_trb(
                     TrbCompletionCode::Success,
                     slot_id,
@@ -319,7 +324,6 @@ impl DeviceSlot {
                     device_context_index,
                 );
                 self.add_one_endpoint(
-                    GuestAddress(trb.get_input_context_pointer()),
                     device_context_index,
                 );
             }
@@ -445,7 +449,7 @@ impl DeviceSlot {
         self.port_id = 0;
     }
 
-    fn add_one_endpoint(&mut self, input_context_ptr: GuestAddress, device_context_index: u8) {
+    fn add_one_endpoint(&mut self, device_context_index: u8) {
         let mut device_context = self.get_device_context();
         let transfer_ring_index = (device_context_index - 1) as usize;
         let trc = TransferRingController::new(
@@ -483,7 +487,7 @@ impl DeviceSlot {
 
     fn set_device_context(&self, device_context: DeviceContext) {
         self.mem
-            .write_obj_at_addr(device_context, self.get_device_context_addr());
+            .write_obj_at_addr(device_context, self.get_device_context_addr()).unwrap();
     }
 
     fn copy_context(&self, input_context_ptr: GuestAddress, device_context_index: u8) {
@@ -493,7 +497,7 @@ impl DeviceSlot {
             self.get_device_context_addr()
                 .checked_add(device_context_index as u64 * DEVICE_CONTEXT_ENTRY_SIZE as u64)
                 .unwrap(),
-        );
+        ).unwrap();
     }
 
     fn get_device_context_addr(&self) -> GuestAddress {
