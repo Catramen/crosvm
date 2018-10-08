@@ -447,7 +447,7 @@ pub struct EndpointContextSchema {
 }
 
 /// Device context.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DeviceContext {
     pub slot_context: SlotContext,
     pub endpoint_context: [EndpointContext; 31],

@@ -162,7 +162,7 @@ impl DeviceSlot {
             );
             return false;
         }
-        debug!("device slot {}: ding-dong. who is that?", self.slot_id);
+        debug!("device slot {}: ding-dong. who is that? target = {}", self.slot_id, target);
         let i = target - 1;
         let transfer_ring_controller = match self.transfer_ring_controllers[i].as_ref() {
             Some(tr) => tr,
@@ -236,15 +236,20 @@ impl DeviceSlot {
             && (device_context.slot_context.state().unwrap() != DeviceSlotState::Default
                 || trb.get_block_set_address_request() > 0)
         {
+            error!("unexpected slot state {}", self.slot_id);
             return TrbCompletionCode::ContextStateError;
         }
 
         // Copy all fields of the slot context and endpoint 0 context from the input context
         // to the output context.
         let input_context_ptr = GuestAddress(trb.get_input_context_pointer());
+        // Copy slot context.
         self.copy_context(input_context_ptr, 0);
+        // Copy control endpoint context.
         self.copy_context(input_context_ptr, 1);
 
+        // Read back device context.
+        let  mut device_context = self.get_device_context();
         self.port_id = device_context.slot_context.get_root_hub_port_number();
         debug!("port id {} is assigned to slot id {}", self.port_id, self.slot_id);
 
@@ -495,7 +500,14 @@ impl DeviceSlot {
     }
 
     fn copy_context(&self, input_context_ptr: GuestAddress, device_context_index: u8) {
-        let ctx: EndpointContext = self.mem.read_obj_from_addr(input_context_ptr).unwrap();
+        // Note that it could be slot context or device context. They have the same size. Won't
+        // make a difference here.
+        let ctx: EndpointContext = self.mem.read_obj_from_addr(
+            input_context_ptr.checked_add(
+                (device_context_index as u64 + 1) * DEVICE_CONTEXT_ENTRY_SIZE as u64
+                ).unwrap()
+            ).unwrap();
+        debug!("context being copied {:?}", ctx);
         self.mem.write_obj_at_addr(
             ctx,
             self.get_device_context_addr()
@@ -514,7 +526,7 @@ impl DeviceSlot {
         GuestAddress(addr)
     }
 
-    // Returns th ecuurent state of the device slot.
+    // Returns the current state of the device slot.
     fn state(&self) -> DeviceSlotState {
         let context = self.get_device_context();
         context.slot_context.state().unwrap()
