@@ -197,8 +197,8 @@ macro_rules! static_register {
 
 /// Spec for a regular register. It specifies it's location on bar, guest writable mask and guest
 /// write to clear mask.
-#[derive(Clone, Copy)]
 pub struct RegisterSpec<T> {
+    pub name: String,
     pub offset: BarOffset,
     pub reset_value: T,
     /// Only masked bits could be written by guest.
@@ -345,14 +345,15 @@ impl<T: RegisterValue> Register<T> {
 #[macro_export]
 macro_rules! register {
     (
-        ty:
-        $ty:ty,offset:
-        $offset:expr,reset_value:
-        $rv:expr,guest_writeable_mask:
-        $mask:expr,guest_write_1_to_clear_mask:
-        $w1tcm:expr,
+        name: $name:tt,
+        ty: $ty:ty,
+        offset: $offset:expr,
+        reset_value: $rv:expr,
+        guest_writeable_mask: $mask:expr,
+        guest_write_1_to_clear_mask: $w1tcm:expr,
     ) => {{
         let spec: RegisterSpec<$ty> = RegisterSpec::<$ty> {
+            name: String::from($name),
             offset: $offset,
             reset_value: $rv,
             guest_writeable_mask: $mask,
@@ -360,8 +361,9 @@ macro_rules! register {
         };
         Register::<$ty>::new(spec, $rv)
     }};
-    (ty: $ty:ty,offset: $offset:expr,reset_value: $rv:expr,) => {{
+    (name: $name:tt, ty: $ty:ty,offset: $offset:expr,reset_value: $rv:expr,) => {{
          let spec: RegisterSpec<$ty> = RegisterSpec::<$ty> {
+            name: String::from($name),
             offset: $offset,
             reset_value: $rv,
             guest_writeable_mask: !0,
@@ -374,6 +376,7 @@ macro_rules! register {
 #[macro_export]
 macro_rules! register_array {
     (
+        name: $name:tt,
         ty:
         $ty:ty,cnt:
         $cnt:expr,base_offset:
@@ -383,16 +386,17 @@ macro_rules! register_array {
         $gwm:expr,guest_write_1_to_clear_mask:
         $gw1tcm:expr,
     ) => {{
-        let mut specs: [RegisterSpec<$ty>; $cnt] = [RegisterSpec::<$ty> {
-            offset: $base_offset,
-            reset_value: $rv,
-            guest_writeable_mask: $gwm,
-            guest_write_1_to_clear_mask: $gw1tcm,
-        }; $cnt];
         let mut v: Vec<Register<$ty>> = Vec::new();
         for i in 0..$cnt {
-            specs[i].offset += ($stride * i) as BarOffset;
-            v.push(Register::<$ty>::new(specs[i], $rv));
+            let offset = $base_offset + ($stride * i) as BarOffset;
+            let mut spec: RegisterSpec<$ty> = RegisterSpec::<$ty> {
+                name: format!("{}-{}", $name, i),
+                offset: offset,
+                reset_value: $rv,
+                guest_writeable_mask: $gwm,
+                guest_write_1_to_clear_mask: $gw1tcm,
+            };
+            v.push(Register::<$ty>::new(spec, $rv));
         }
         v
     }};
@@ -455,6 +459,7 @@ mod tests {
     #[test]
     fn register_basic_rw_test() {
         let r = register! {
+            name: "",
             ty: u8,
             offset: 3,
             reset_value: 0xf1,
@@ -480,6 +485,7 @@ mod tests {
     #[test]
     fn register_basic_writeable_mask_test() {
         let r = register! {
+            name: "",
             ty: u8,
             offset: 3,
             reset_value: 0x0,
@@ -503,6 +509,7 @@ mod tests {
     #[test]
     fn register_basic_write_1_to_clear_mask_test() {
         let r = register! {
+            name: "",
             ty: u8,
             offset: 3,
             reset_value: 0xf1,
@@ -526,6 +533,7 @@ mod tests {
     #[test]
     fn register_basic_write_1_to_clear_mask_test_u32() {
         let r = register! {
+            name: "",
             ty: u32,
             offset: 0,
             reset_value: 0xfff1,
@@ -550,6 +558,7 @@ mod tests {
     fn register_callback_test() {
         let state = Arc::new(Mutex::new(0u8));
         let r = register! {
+            name: "",
             ty: u8,
             offset: 3,
             reset_value: 0xf1,

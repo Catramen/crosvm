@@ -182,6 +182,7 @@ mod tests {
     fn mmio_reg_write() {
         let mut mmio = MMIOSpace::new();
         mmio.add_register(register!(
+                name: "",
                 ty: u32,
                 offset: 2,
                 reset_value: 0xaabbccdd,
@@ -205,6 +206,7 @@ mod tests {
     fn mmio_reg_writeable() {
         let mut mmio = MMIOSpace::new();
         mmio.add_register(register!(
+                name: "",
                 ty: u32,
                 offset: 2,
                 reset_value: 0xaabbccdd,
@@ -231,6 +233,7 @@ mod tests {
         let state = Arc::new(Mutex::new(0u32));
         let mut mmio = MMIOSpace::new();
         let mut reg = register!(
+                name: "",
                 ty: u32,
                 offset: 2,
                 reset_value: 0xaabbccdd,
@@ -255,6 +258,7 @@ mod tests {
     fn mmio_reg_write_to_clear() {
         let mut mmio = MMIOSpace::new();
         mmio.add_register(register!(
+                name: "",
                 ty: u32,
                 offset: 2,
                 reset_value: 0xaabbccdd,
@@ -280,6 +284,7 @@ mod tests {
     fn mmio_reg_array() {
         let mut mmio = MMIOSpace::new();
         mmio.add_register_array(&register_array!(
+                name: "",
                 ty: u8,
                 cnt: 8,
                 base_offset: 10,
@@ -297,6 +302,7 @@ mod tests {
     fn mmio_reg_multi_array() {
         let mut mmio = MMIOSpace::new();
         mmio.add_register_array(&register_array!(
+                name: "",
                 ty: u8,
                 cnt: 8,
                 base_offset: 10,
@@ -306,6 +312,7 @@ mod tests {
                 guest_write_1_to_clear_mask: 0,
                 ));
         mmio.add_register_array(&register_array!(
+                name: "",
                 ty: u8,
                 cnt: 8,
                 base_offset: 11,

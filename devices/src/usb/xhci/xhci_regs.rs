@@ -197,6 +197,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     /**************************************************************************/
     /***************** Host Controller Operational Registers ******************/
     let usbcmd = register!(
+            name: "usbcmd",
             ty: u32,
             offset: 0x20,
             reset_value: 0,
@@ -206,6 +207,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(usbcmd.clone());
 
     let usbsts = register!(
+            name: "usbsts",
             ty: u32,
             offset: 0x24,
             reset_value: 0x00000001,
@@ -224,6 +226,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     );
 
     let dnctrl = register!(
+            name: "dnctrl",
             ty: u32,
             offset: 0x34,
             reset_value: 0,
@@ -233,6 +236,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(dnctrl.clone());
 
     let crcr = register!(
+            name: "crcr",
             ty: u64,
             offset: 0x38,
             reset_value: 9,
@@ -242,6 +246,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(crcr.clone());
 
     let dcbaap = register!(
+            name: "dcbaap",
             ty: u64,
             offset: 0x50,
             reset_value: 0x0,
@@ -251,6 +256,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(dcbaap.clone());
 
     let config = register!(
+            name: "config",
             ty: u64,
             offset: 0x58,
             reset_value: 0,
@@ -260,6 +266,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(config.clone());
 
     let portsc = register_array!(
+        name: "portsc",
         ty: u32,
         cnt: 8, //  Must be equal to max_ports
         base_offset: 0x420,
@@ -271,6 +278,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
 
     // Portpmsc.
     mmio.add_register_array(&register_array!(
+            name: "portpmsc",
             ty: u32,
             cnt: 8,
             base_offset: 0x424,
@@ -281,6 +289,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
 
     // Portli
     mmio.add_register_array(&register_array!(
+            name: "portli",
             ty: u32,
             cnt: 8,
             base_offset: 0x428,
@@ -291,6 +300,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
 
     // Porthlpmc
     mmio.add_register_array(&register_array!(
+            name: "porthlpmc",
             ty: u32,
             cnt: 8,
             base_offset: 0x42c,
@@ -300,6 +310,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
             guest_write_1_to_clear_mask: 0,));
 
     let doorbells = register_array!(
+        name: "doorbell",
         ty: u32,
         cnt: 9, //  Must be equal to max_ports
         base_offset: 0x2000,
@@ -324,6 +335,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     /*************************** Reg Array for interrupters *******************/
     // Although the following should be register arrays, we only have one interrupter.
     let iman = register!(
+            name: "iman",
             ty: u32,
             offset: 0x3020,
             reset_value: 0,
@@ -332,6 +344,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(iman.clone());
 
     let imod = register!(
+            name: "imod",
             ty: u32,
             offset: 0x3024,
             reset_value: 0x00000FA0,
@@ -340,6 +353,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(imod.clone());
 
     let erstsz = register!(
+        name: "erstsz",
         ty: u32,
         offset: 0x3028,
         reset_value: 0,
@@ -348,6 +362,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(erstsz.clone());
 
     let erstba = register!(
+        name: "erstba",
         ty: u64,
         offset: 0x3030,
         reset_value: 0,
@@ -356,6 +371,7 @@ pub fn init_xhci_mmio_space_and_regs() -> (MMIOSpace, XHCIRegs) {
     mmio.add_register(erstba.clone());
 
     let erdp = register!(
+        name: "erdp",
         ty: u64,
         offset: 0x3038,
         reset_value: 0,
