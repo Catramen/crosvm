@@ -41,22 +41,22 @@ impl CommandRingTrbHandler {
         CommandRingTrbHandler { slots, interrupter }
     }
 
-    // Slot idex + 1= Slot id
-    fn slot(&self, slot_index: u8) -> MutexGuard<DeviceSlot> {
-        self.slots.slot(slot_index).unwrap()
+    fn slot(&self, slot_id: u8) -> MutexGuard<DeviceSlot> {
+        self.slots.slot(slot_id).unwrap()
     }
 
     fn enable_slot(&self, atrb: &AddressedTrb, event_fd: EventFd) {
-        debug!("running enable slot command ");
         for i in 0..MAX_SLOTS {
-            if self.slot(i).enable() {
+            let slot_id = i + 1;
+            if self.slot(slot_id).enable() {
                 // Slot id starts from 1.
+                debug!("running enable slot command slot_id {}", i);
                 self.interrupter
                     .lock()
                     .unwrap()
                     .send_command_completion_trb(
                         TrbCompletionCode::Success,
-                        i + 1,
+                        slot_id,
                         GuestAddress(atrb.gpa),
                     );
                 event_fd.write(1).unwrap();
@@ -78,7 +78,7 @@ impl CommandRingTrbHandler {
         debug!("disabling slot");
         let trb = atrb.trb.cast::<DisableSlotCommandTrb>();
         let slot_id = trb.get_slot_id();
-        if slot_id < MAX_SLOTS {
+        if slot_id > 0 && slot_id <= MAX_SLOTS {
             self.slots.disable_slot(slot_id, atrb, event_fd);
         } else {
             self.interrupter
@@ -97,7 +97,7 @@ impl CommandRingTrbHandler {
         debug!("addressing device");
         let trb = atrb.trb.cast::<AddressDeviceCommandTrb>();
         let slot_id = trb.get_slot_id();
-        if slot_id < MAX_SLOTS {
+        if slot_id > 0 && slot_id <= MAX_SLOTS {
             self.interrupter
                 .lock()
                 .unwrap()

@@ -76,6 +76,7 @@ pub trait RegisterValue:
     + std::ops::BitOr<Self, Output = Self>
     + std::ops::BitAnd<Self, Output = Self>
     + std::ops::Not<Output = Self>
+    + std::fmt::LowerHex
 {
     // Get byte of the offset.
     fn get_byte(&self, offset: usize) -> u8 {
@@ -247,6 +248,8 @@ impl<T: RegisterValue> RegisterInterface for Register<T> {
         let val_range = self.bar_range();
         let value = self.inner.lock().unwrap().value.clone();
         read_reg_helper(value, val_range, addr, data);
+        debug!("register {} read value: {:x}",
+               self.inner.lock().unwrap().spec.name.as_str(), value);
     }
 
     fn write_bar(&self, addr: BarOffset, data: &[u8]) {
@@ -256,7 +259,7 @@ impl<T: RegisterValue> RegisterInterface for Register<T> {
             to: addr + data.len() as u64 - 1,
         };
         if !my_range.overlap_with(&write_range) {
-            // TODO(jkwang) Alarm the user.
+            error!("write bar should not be invoked on this register");
             return;
         }
         let overlap = my_range.overlap_range(&write_range).unwrap();
@@ -265,8 +268,7 @@ impl<T: RegisterValue> RegisterInterface for Register<T> {
         let total_size = (overlap.to - overlap.from) as usize + 1;
 
         let mut reg_value: T = self.inner.lock().unwrap().value.clone();
-        // It is not necessary to use slice here. But it's much easier than adding trait bounds
-        // to enable shift operations.
+        let old_reg_value = reg_value;
         {
             let value: &mut [u8] = reg_value.as_mut_slice();
             for i in 0..total_size {
@@ -277,6 +279,10 @@ impl<T: RegisterValue> RegisterInterface for Register<T> {
                 );
             }
         }
+        let after_apply_mask_value = reg_value;
+        // Taking the callback out of register when executing it. This prevent dead lock if
+        // callback want to read current register value.
+        // Note that the only source of callback comes from mmio writing, which is synchronized.
         let cb = {
             let mut inner = self.inner.lock().unwrap();
             // Write value if there is no callback.
@@ -288,9 +294,16 @@ impl<T: RegisterValue> RegisterInterface for Register<T> {
         };
         // Callback is invoked without holding any lock.
         let value = cb(reg_value);
+        let after_cb_value = value;
         let mut inner = self.inner.lock().unwrap();
         inner.value = value;
         inner.write_cb = Some(cb);
+        debug!("register {}. before write {:x},
+        write value after applying mask {:x},
+        write value after callback {:x}", inner.spec.name.as_str(),
+        old_reg_value, after_apply_mask_value,
+        after_cb_value);
+
     }
 
     fn reset(&self) {

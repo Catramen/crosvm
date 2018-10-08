@@ -44,8 +44,9 @@ impl DeviceSlots {
     ) -> DeviceSlots {
         let mut vec = Vec::new();
         for i in 0..MAX_SLOTS {
+            let slot_id = i + 1;
             vec.push(Arc::new(Mutex::new(DeviceSlot::new(
-                (i + 1) as u8,
+                slot_id as u8,
                 dcbaap.clone(),
                 hub.clone(),
                 interrupter.clone(),
@@ -59,13 +60,14 @@ impl DeviceSlots {
         }
     }
 
-    pub fn slot(&self, slot_index: u8) -> Option<MutexGuard<DeviceSlot>> {
-        if slot_index >= MAX_SLOTS as u8 {
-            error!("trying to index an over large slot index {}, max slot = {}",
-                   slot_index, MAX_SLOTS);
+    /// Note that slot id starts from 0. Slot index start from 1.
+    pub fn slot(&self, slot_id: u8) -> Option<MutexGuard<DeviceSlot>> {
+        if slot_id == 0 || slot_id > MAX_SLOTS as u8 {
+            error!("trying to index a wrong slot id {}, max slot = {}",
+                   slot_id, MAX_SLOTS);
             None
         } else {
-            Some(self.slots[slot_index as usize].lock().unwrap())
+            Some(self.slots[slot_id as usize - 1].lock().unwrap())
         }
     }
 
@@ -92,12 +94,12 @@ impl DeviceSlots {
 
     pub fn disable_slot(&self, slot_id: u8, atrb: &AddressedTrb, event_fd: EventFd) {
         debug!("device slot {} is disabling", slot_id);
-        DeviceSlot::disable(&self.slots[slot_id as usize], atrb, event_fd);
+        DeviceSlot::disable(&self.slots[slot_id as usize - 1], atrb, event_fd);
     }
 
     pub fn reset_slot(&self, slot_id: u8, atrb: &AddressedTrb, event_fd: EventFd) {
         debug!("device slot {} is reseting", slot_id);
-        DeviceSlot::reset_slot(&self.slots[slot_id as usize], atrb, event_fd);
+        DeviceSlot::reset_slot(&self.slots[slot_id as usize - 1], atrb, event_fd);
     }
 }
 
@@ -154,12 +156,13 @@ impl DeviceSlot {
     pub fn ring_doorbell(&self, target: usize, _stream_id: u16) -> bool {
         if target < 1 || target > 31 {
             error!(
-                "Invalid target written to doorbell register. target: {}",
+                "device slot {}: Invalid target written to doorbell register. target: {}",
+                self.slot_id,
                 target
             );
             return false;
         }
-        debug!("ding-dong. who is that?");
+        debug!("device slot {}: ding-dong. who is that?", self.slot_id);
         let i = target - 1;
         let transfer_ring_controller = match self.transfer_ring_controllers[i].as_ref() {
             Some(tr) => tr,
@@ -181,18 +184,17 @@ impl DeviceSlot {
             error!("device slot is already enabled");
             return false;
         }
-        debug!("device slot enabled");
+        debug!("device slot {} enabled", self.slot_id);
         self.enabled = true;
         return true;
     }
 
     pub fn disable(slot: &Arc<Mutex<DeviceSlot>>, atrb: &AddressedTrb, event_fd: EventFd) {
-        debug!("device slot is being disabled");
         let s = slot.lock().unwrap();
+        debug!("device slot {} is being disabled", s.slot_id);
         let gpa = atrb.gpa;
         let slot_id = s.slot_id;
         if s.enabled {
-            debug!("being disabled.");
             let interrupter = s.interrupter.clone();
             let slot_weak = Arc::downgrade(slot);
             let auto_callback = AutoCallback::new(move || {
@@ -204,7 +206,7 @@ impl DeviceSlot {
                     .set_state(DeviceSlotState::DisabledOrEnabled);
                 slot.set_device_context(device_context);
                 slot.reset();
-                debug!("all trc disabled, sending trb");
+                debug!("device slot {}: all trc disabled, sending trb", slot.slot_id);
                 interrupter.lock().unwrap().send_command_completion_trb(
                     TrbCompletionCode::Success,
                     slot_id,
@@ -226,6 +228,7 @@ impl DeviceSlot {
     // Assigns the device address and initializes slot and endpoint 0 context.
     pub fn set_address(&mut self, trb: &AddressDeviceCommandTrb) -> TrbCompletionCode {
         if !self.enabled {
+            error!("trying to set address to a disabled device slot {}", self.slot_id);
             return TrbCompletionCode::SlotNotEnabledError;
         }
         let mut device_context = self.get_device_context();
@@ -445,6 +448,7 @@ impl DeviceSlot {
         for i in 0..self.transfer_ring_controllers.len() {
             self.transfer_ring_controllers[i] = None;
         }
+        debug!("reseting device slot {}!", self.slot_id);
         self.enabled = false;
         self.port_id = 0;
     }
