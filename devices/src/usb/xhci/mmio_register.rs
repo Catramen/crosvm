@@ -209,6 +209,7 @@ pub struct RegisterSpec<T> {
 }
 
 struct RegisterInner<T: RegisterValue> {
+    spec: RegisterSpec<T>,
     value: T,
     write_cb: Option<Box<Fn(T) -> T + Send>>,
 }
@@ -216,15 +217,14 @@ struct RegisterInner<T: RegisterValue> {
 /// Register is a thread safe struct. It can be safely changed from any thread.
 #[derive(Clone)]
 pub struct Register<T: RegisterValue> {
-    spec: &'static RegisterSpec<T>,
     inner: Arc<Mutex<RegisterInner<T>>>,
 }
 
 impl<T: RegisterValue> Register<T> {
-    pub fn new(spec: &'static RegisterSpec<T>, val: T) -> Self {
+    pub fn new(spec: RegisterSpec<T>, val: T) -> Self {
         Register::<T> {
-            spec,
             inner: Arc::new(Mutex::new(RegisterInner::<T> {
+                spec,
                 value: val,
                 write_cb: None,
             })),
@@ -235,9 +235,11 @@ impl<T: RegisterValue> Register<T> {
 // All functions implemented on this one is thread safe.
 impl<T: RegisterValue> RegisterInterface for Register<T> {
     fn bar_range(&self) -> BarRange {
+        let locked = self.inner.lock().unwrap();
+        let spec = &locked.spec;
         BarRange {
-            from: self.spec.offset,
-            to: self.spec.offset + (size_of::<T>() as u64) - 1,
+            from: spec.offset,
+            to: spec.offset + (size_of::<T>() as u64) - 1,
         }
     }
 
@@ -292,7 +294,8 @@ impl<T: RegisterValue> RegisterInterface for Register<T> {
     }
 
     fn reset(&self) {
-        self.inner.lock().unwrap().value = self.spec.reset_value.clone();
+        let mut locked = self.inner.lock().unwrap();
+        locked.value = locked.spec.reset_value.clone();
     }
 }
 
@@ -306,8 +309,10 @@ impl<T: RegisterValue> Register<T> {
     /// All write operations should go through this, the result of this function
     /// is the new state of correspoding byte.
     pub fn apply_write_masks_to_byte(&self, old_byte: u8, write_byte: u8, offset: usize) -> u8 {
-        let guest_write_1_to_clear_mask: u64 = self.spec.guest_write_1_to_clear_mask.clone().into();
-        let guest_writeable_mask: u64 = self.spec.guest_writeable_mask.clone().into();
+        let locked = self.inner.lock().unwrap();
+        let spec = &locked.spec;
+        let guest_write_1_to_clear_mask: u64 = spec.guest_write_1_to_clear_mask.clone().into();
+        let guest_writeable_mask: u64 = spec.guest_writeable_mask.clone().into();
         // Mask with w1c mask.
         let w1c_mask = (guest_write_1_to_clear_mask >> (offset * 8)) as u8;
         let val = (!w1c_mask & write_byte) | (w1c_mask & old_byte & !write_byte);
@@ -347,22 +352,22 @@ macro_rules! register {
         $mask:expr,guest_write_1_to_clear_mask:
         $w1tcm:expr,
     ) => {{
-        static REG_SPEC: RegisterSpec<$ty> = RegisterSpec::<$ty> {
+        let spec: RegisterSpec<$ty> = RegisterSpec::<$ty> {
             offset: $offset,
             reset_value: $rv,
             guest_writeable_mask: $mask,
             guest_write_1_to_clear_mask: $w1tcm,
         };
-        Register::<$ty>::new(&REG_SPEC, $rv)
+        Register::<$ty>::new(spec, $rv)
     }};
     (ty: $ty:ty,offset: $offset:expr,reset_value: $rv:expr,) => {{
-        static REG_SPEC: RegisterSpec<$ty> = RegisterSpec::<$ty> {
+         let spec: RegisterSpec<$ty> = RegisterSpec::<$ty> {
             offset: $offset,
             reset_value: $rv,
             guest_writeable_mask: !0,
             guest_write_1_to_clear_mask: 0,
         };
-        Register::<$ty>::new(&REG_SPEC, $rv)
+        Register::<$ty>::new(spec, $rv)
     }};
 }
 
@@ -378,7 +383,7 @@ macro_rules! register_array {
         $gwm:expr,guest_write_1_to_clear_mask:
         $gw1tcm:expr,
     ) => {{
-        static mut REGS: [RegisterSpec<$ty>; $cnt] = [RegisterSpec::<$ty> {
+        let mut specs: [RegisterSpec<$ty>; $cnt] = [RegisterSpec::<$ty> {
             offset: $base_offset,
             reset_value: $rv,
             guest_writeable_mask: $gwm,
@@ -386,10 +391,8 @@ macro_rules! register_array {
         }; $cnt];
         let mut v: Vec<Register<$ty>> = Vec::new();
         for i in 0..$cnt {
-            unsafe {
-                REGS[i].offset += ($stride * i) as BarOffset;
-                v.push(Register::<$ty>::new(&REGS[i], $rv));
-            }
+            specs[i].offset += ($stride * i) as BarOffset;
+            v.push(Register::<$ty>::new(specs[i], $rv));
         }
         v
     }};

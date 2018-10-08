@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn mmio_no_reg() {
-        let mut mmio = MMIOSpace::new();
+        let mmio = MMIOSpace::new();
         mmio.reset_all_registers();
         let mut data: [u8; 4] = [4, 3, 2, 1];
         // Read bar should be no op cause no register.
