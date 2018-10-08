@@ -32,6 +32,7 @@ pub trait TransferDescriptorHandler {
 
 /// RingBufferController handles transfer descriptor.
 pub struct RingBufferController<T: 'static + TransferDescriptorHandler> {
+    name: String,
     state: Mutex<RingBufferState>,
     stop_callback: Mutex<Vec<AutoCallback>>,
     ring_buffer: Mutex<RingBuffer>,
@@ -46,6 +47,7 @@ where
 {
     /// Create a ring buffer controller and add it to event loop.
     pub fn create_controller(
+        name: String,
         mem: GuestMemory,
         event_loop: EventLoop,
         handler: T,
@@ -53,9 +55,10 @@ where
         let evt = EventFd::new().unwrap();
         let rawfd = EventFd::as_raw_fd(&evt);
         let controller = Arc::new(RingBufferController {
+            name: name.clone(),
             state: Mutex::new(RingBufferState::Stopped),
             stop_callback: Mutex::new(Vec::new()),
-            ring_buffer: Mutex::new(RingBuffer::new(mem)),
+            ring_buffer: Mutex::new(RingBuffer::new(name.clone(), mem)),
             handler: Mutex::new(handler),
             event_loop: Mutex::new(event_loop.clone()),
             event: evt,
@@ -71,14 +74,14 @@ where
 
     /// Set dequeue pointer of the internal ring buffer.
     pub fn set_dequeue_pointer(&self, ptr: GuestAddress) {
-        debug!("dequeue pointer: {:x}", ptr.0);
+        debug!("{}: dequeue pointer: {:x}", self.name.as_str(), ptr.0);
         // Fast because this should only hanppen during xhci setup.
         self.ring_buffer.lock().unwrap().set_dequeue_pointer(ptr);
     }
 
     /// Set consumer cycle state.
     pub fn set_consumer_cycle_state(&self, state: bool) {
-        debug!("consumer cycle state: {}", state);
+        debug!("{}: consumer cycle state: {}", self.name.as_str(), state);
         // Fast because this should only hanppen during xhci setup.
         self.ring_buffer
             .lock()
@@ -88,7 +91,7 @@ where
 
     /// Start the ring buffer.
     pub fn start(&self) {
-        debug!("ring buffer started");
+        debug!("{} started", self.name.as_str());
         let mut state = self.state.lock().unwrap();
         if *state != RingBufferState::Running {
             *state = RingBufferState::Running;
@@ -98,7 +101,7 @@ where
 
     /// Stop the ring buffer asynchronously.
     pub fn stop(&self, callback: AutoCallback) {
-        debug!("ring buffer stopped");
+        debug!("{} stopped", self.name.as_str());
         let mut state = self.state.lock().unwrap();
         if *state == RingBufferState::Stopped {
             return;
@@ -126,7 +129,7 @@ where
     T: 'static + TransferDescriptorHandler + Send,
 {
     fn on_event(&self, _fd: RawFd) {
-        debug!("ring buffer start dequeue trbs");
+        debug!("{} start dequeue trbs", self.name.as_str());
         let _ = self.event.read();
         let transfer_descriptor = {
             let mut ring_buffer = self.ring_buffer.lock().unwrap();
@@ -138,7 +141,8 @@ where
             if *state == RingBufferState::Stopped {
                 return;
             } else if *state == RingBufferState::Stopping || transfer_descriptor.is_none() {
-                debug!("No transfer descriptor, stoping ring buffer controller");
+                debug!("{}: no transfer descriptor, stoping ring buffer controller",
+                       self.name.as_str());
                 *state = RingBufferState::Stopped;
                 self.stop_callback.lock().unwrap().clear();
                 return;

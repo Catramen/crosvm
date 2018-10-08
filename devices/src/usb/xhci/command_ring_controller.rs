@@ -24,6 +24,7 @@ impl CommandRingController {
         interrupter: Arc<Mutex<Interrupter>>,
     ) -> Arc<CommandRingController> {
         RingBufferController::create_controller(
+            String::from("command ring"),
             mem,
             event_loop,
             CommandRingTrbHandler::new(slots, interrupter),

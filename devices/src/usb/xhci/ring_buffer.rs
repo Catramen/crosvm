@@ -14,6 +14,7 @@ use super::xhci_abi::*;
 /// Ring buffer logic is shared between transfer ring and command ring.
 /// Transfer Ring management is defined in xHCI spec 4.9.2.
 pub struct RingBuffer {
+    name: String,
     mem: GuestMemory,
     dequeue_pointer: GuestAddress,
     // Used to check if the ring is empty. Toggled when looping back to the begining
@@ -24,8 +25,9 @@ pub struct RingBuffer {
 // Public interfaces for Ring buffer.
 impl RingBuffer {
     /// Create a new RingBuffer.
-    pub fn new(mem: GuestMemory) -> Self {
+    pub fn new(name: String, mem: GuestMemory) -> Self {
         RingBuffer {
+            name,
             mem: mem,
             dequeue_pointer: GuestAddress(0),
             consumer_cycle_state: false,
@@ -54,7 +56,8 @@ impl RingBuffer {
                 None => panic!("Crash due to unknown bug"),
             };
 
-            debug!("adding trb to td {}", &addressed_trb.trb.debug_str());
+            debug!("{}: adding trb to td {}",
+                   self.name.as_str(), &addressed_trb.trb.debug_str());
             td.push(addressed_trb);
             if !addressed_trb.trb.get_chain_bit() {
                 debug!("trb chain is false returning");
@@ -72,17 +75,24 @@ impl RingBuffer {
 
     /// Set dequeue pointer of the ring buffer.
     pub fn set_dequeue_pointer(&mut self, addr: GuestAddress) {
+        debug!("{}: set dequeue pointer {:x}",
+               self.name.as_str(), addr.0);
+
         self.dequeue_pointer = addr;
     }
 
     /// Set consumer cycle state of the ring buffer.
     pub fn set_consumer_cycle_state(&mut self, state: bool) {
+        debug!("{}: set consumer cycle state {}",
+               self.name.as_str(), state);
         self.consumer_cycle_state = state;
     }
 
     // Read trb pointed by dequeue pointer. Does not proceed dequeue pointer.
     fn get_current_trb(&self) -> Option<AddressedTrb> {
         let trb: Trb = self.mem.read_obj_from_addr(self.dequeue_pointer).unwrap();
+        debug!("{}: trb read from memory {:?}",
+                   self.name.as_str(), trb);
         // If cycle bit of trb does not equal consumer cycle state, the ring is empty.
         // This trb is invalid.
         if trb.get_cycle_bit() != self.consumer_cycle_state {
@@ -104,7 +114,7 @@ mod test {
     fn ring_test_dequeue() {
         let trb_size = size_of::<Trb>() as u64;
         let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x1000)]).unwrap();
-        let mut transfer_ring = RingBuffer::new(gm.clone());
+        let mut transfer_ring = RingBuffer::new(String::new(), gm.clone());
 
         // Structure of ring buffer:
         //  0x100  --> 0x200  --> 0x300
@@ -177,7 +187,7 @@ mod test {
     fn transfer_ring_test_dequeue_failure() {
         let trb_size = size_of::<Trb>() as u64;
         let gm = GuestMemory::new(&vec![(GuestAddress(0), 0x1000)]).unwrap();
-        let mut transfer_ring = RingBuffer::new(gm.clone());
+        let mut transfer_ring = RingBuffer::new(String::new(), gm.clone());
 
         let mut trb = NormalTrb::new();
         trb.set_trb_type(TrbType::Normal as u8);
