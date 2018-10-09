@@ -301,6 +301,56 @@ pub struct EvaluateContextCommandTrbSchema {
     slot_id: B8,
 }
 
+// Schema of reset endpoint commnad trb.
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
+pub struct ResetEndpointCommandTrbSchema {
+    reserved0: B32,
+    reserved1: B32,
+    reserved2: B32,
+    cycle: B1,
+    reserved3: B8,
+    transfer_state_preserve: B1,
+    trb_type: B6,
+    endpoint_id: B5,
+    reserved4: B3,
+    slot_id: B8,
+}
+
+// Schema of stop endpoint command trb.
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
+pub struct StopEndpointCommandTrbSchema {
+    reserved0: B32,
+    reserved1: B32,
+    reserved2: B32,
+    cycle: B1,
+    reserved3: B9,
+    trb_type: B6,
+    endpoint_id: B5,
+    reserved4: B2,
+    suspend: B1,
+    slot_id: B8,
+}
+
+// Schema of set tr dequeue command trb.
+#[derive(BitField)]
+#[passthrough(derive(Clone, Copy))]
+pub struct SetTRDequeuePointerCommandTrbSchema {
+    dequeue_cycle_state : B1,
+    stream_context_type : B3,
+    dequeue_ptr: B60,
+    reserved0: B16,
+    stream_id: B16,
+    cycle: B1,
+    reserved1: B9,
+    trb_type: B6,
+    endpoint_id: B5,
+    reserved3: B2,
+    suspend: B1,
+    slot_id: B8,
+}
+
 // Schema of reset device command trb.
 #[derive(BitField)]
 #[passthrough(derive(Clone, Copy))]
@@ -483,6 +533,9 @@ mod tests {
         assert_eq!(std::mem::size_of::<AddressDeviceCommandTrb>(), TRB_SIZE);
         assert_eq!(std::mem::size_of::<ConfigureEndpointCommandTrb>(), TRB_SIZE);
         assert_eq!(std::mem::size_of::<EvaluateContextCommandTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<ResetEndpointCommandTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<StopEndpointCommandTrb>(), TRB_SIZE);
+        assert_eq!(std::mem::size_of::<SetTRDequeuePointerCommandTrb>(), TRB_SIZE);
         assert_eq!(std::mem::size_of::<ResetDeviceCommandTrb>(), TRB_SIZE);
         assert_eq!(std::mem::size_of::<TransferEventTrb>(), TRB_SIZE);
         assert_eq!(std::mem::size_of::<CommandCompletionEventTrb>(), TRB_SIZE);

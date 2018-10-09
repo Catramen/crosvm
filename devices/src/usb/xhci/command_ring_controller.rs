@@ -188,6 +188,7 @@ impl CommandRingTrbHandler {
                     slot_id,
                     GuestAddress(atrb.gpa),
                 );
+            event_fd.write(1).unwrap();
         }
     }
 }
@@ -217,10 +218,23 @@ impl TransferDescriptorHandler for CommandRingTrbHandler {
                     );
                 complete_event.write(1).unwrap();
             }
-            _ => warn!(
-                "Unexpected command ring trb type: {}",
-                atrb.trb.get_trb_type()
-            ),
+            _ => {
+                warn!(
+                    // We are not handling type 14,15,16. See table 6.4.6.
+                    "Unexpected command ring trb type: {}",
+                    atrb.trb.get_trb_type()
+                    );
+                self.interrupter
+                    .lock()
+                    .unwrap()
+                    .send_command_completion_trb(
+                        TrbCompletionCode::TrbError,
+                        0,
+                        GuestAddress(atrb.gpa),
+                        );
+                complete_event.write(1).unwrap();
+
+            },
         }
     }
 }

@@ -20,6 +20,9 @@ unsafe impl DataInit for DisableSlotCommandTrb {}
 unsafe impl DataInit for AddressDeviceCommandTrb {}
 unsafe impl DataInit for ConfigureEndpointCommandTrb {}
 unsafe impl DataInit for EvaluateContextCommandTrb {}
+unsafe impl DataInit for ResetEndpointCommandTrb {}
+unsafe impl DataInit for StopEndpointCommandTrb {}
+unsafe impl DataInit for SetTRDequeuePointerCommandTrb {}
 unsafe impl DataInit for ResetDeviceCommandTrb {}
 unsafe impl DataInit for TransferEventTrb {}
 unsafe impl DataInit for CommandCompletionEventTrb {}
@@ -45,6 +48,9 @@ unsafe impl TrbCast for DisableSlotCommandTrb {}
 unsafe impl TrbCast for AddressDeviceCommandTrb {}
 unsafe impl TrbCast for ConfigureEndpointCommandTrb {}
 unsafe impl TrbCast for EvaluateContextCommandTrb {}
+unsafe impl TrbCast for ResetEndpointCommandTrb {}
+unsafe impl TrbCast for StopEndpointCommandTrb {}
+unsafe impl TrbCast for SetTRDequeuePointerCommandTrb {}
 unsafe impl TrbCast for ResetDeviceCommandTrb {}
 unsafe impl TrbCast for TransferEventTrb {}
 unsafe impl TrbCast for CommandCompletionEventTrb {}
@@ -107,6 +113,18 @@ impl TypedTrb for EvaluateContextCommandTrb {
     const TY: TrbType = TrbType::EvaluateContextCommand;
 }
 
+impl TypedTrb for ResetEndpointCommandTrb {
+    const TY: TrbType = TrbType::ResetEndpointCommand;
+}
+
+impl TypedTrb for StopEndpointCommandTrb {
+    const TY: TrbType = TrbType::StopEndpointCommand;
+}
+
+impl TypedTrb for SetTRDequeuePointerCommandTrb {
+    const TY: TrbType = TrbType::SetTRDequeuePointerCommand;
+}
+
 impl TypedTrb for ResetDeviceCommandTrb {
     const TY: TrbType = TrbType::ResetDeviceCommand;
 }
@@ -156,6 +174,9 @@ impl Trb {
     }
 
     pub fn debug_str(&self) -> String {
+        if self.trb_type().is_none() {
+            return format!("unexpected trb type: {:?}", self);
+        }
         match self.trb_type().unwrap() {
             TrbType::Reserved => {
                 format!("reserved trb type")
@@ -179,46 +200,70 @@ impl Trb {
                 format!("trb: {:?}", t)
 
             },
-            TrbType::Isoch => {let t = self.cast::<IsochTrb>();
+            TrbType::Isoch => {
+                let t = self.cast::<IsochTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::Link => {let t = self.cast::<LinkTrb>();
+            TrbType::Link => {
+                let t = self.cast::<LinkTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::EventData => {let t = self.cast::<EventDataTrb>();
+            TrbType::EventData => {
+                let t = self.cast::<EventDataTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::Noop => {let t = self.cast::<NoopTrb>();
+            TrbType::Noop => {
+                let t = self.cast::<NoopTrb>();
                 format!("trb: {:?}", t)
             },
             TrbType::EnableSlotCommand => {
                 format!("trb: enable slot command {:?}", self)
             },
-            TrbType::DisableSlotCommand => {let t = self.cast::<DisableSlotCommandTrb>();
+            TrbType::DisableSlotCommand => {
+                let t = self.cast::<DisableSlotCommandTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::AddressDeviceCommand => {let t = self.cast::<AddressDeviceCommandTrb>();
+            TrbType::AddressDeviceCommand => {
+                let t = self.cast::<AddressDeviceCommandTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::ConfigureEndpointCommand => {let t = self.cast::<ConfigureEndpointCommandTrb>();
+            TrbType::ConfigureEndpointCommand => {
+                let t = self.cast::<ConfigureEndpointCommandTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::EvaluateContextCommand => {let t = self.cast::<EvaluateContextCommandTrb>();
+            TrbType::EvaluateContextCommand => {
+                let t = self.cast::<EvaluateContextCommandTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::ResetDeviceCommand => {let t = self.cast::<ResetDeviceCommandTrb>();
+            TrbType::ResetEndpointCommand => {
+                let t = self.cast::<ResetEndpointCommandTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::StopEndpointCommand => {
+                let t = self.cast::<StopEndpointCommandTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::SetTRDequeuePointerCommand => {
+                let t = self.cast::<SetTRDequeuePointerCommandTrb>();
+                format!("trb: {:?}", t)
+            },
+            TrbType::ResetDeviceCommand => {
+                let t = self.cast::<ResetDeviceCommandTrb>();
                 format!("trb: {:?}", t)
             }
             TrbType::NoopCommand => {
                 format!("trb: noop command {:?}", self)
             },
-            TrbType::TransferEvent => {let t = self.cast::<TransferEventTrb>();
+            TrbType::TransferEvent => {
+                let t = self.cast::<TransferEventTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::CommandCompletionEvent => {let t = self.cast::<CommandCompletionEventTrb>();
+            TrbType::CommandCompletionEvent => {
+                let t = self.cast::<CommandCompletionEventTrb>();
                 format!("trb: {:?}", t)
             },
-            TrbType::PortStatusChangeEvent =>{let t = self.cast::<PortStatusChangeEventTrb>();
+            TrbType::PortStatusChangeEvent =>{
+                let t = self.cast::<PortStatusChangeEventTrb>();
                 format!("trb: {:?}", t)
             }
         }
@@ -239,14 +284,14 @@ impl Trb {
 
     /// Get chain bit.
     pub fn get_chain_bit(&self) -> bool {
-        match self.trb_type().unwrap() {
-            TrbType::Normal => self.cast::<NormalTrb>().get_chain() != 0,
-            TrbType::DataStage => self.cast::<DataStageTrb>().get_chain() != 0,
-            TrbType::StatusStage => self.cast::<StatusStageTrb>().get_chain() != 0,
-            TrbType::Isoch => self.cast::<IsochTrb>().get_chain() != 0,
-            TrbType::Noop => self.cast::<NoopTrb>().get_chain() != 0,
-            TrbType::Link => self.cast::<LinkTrb>().get_chain() != 0,
-            TrbType::EventData => self.cast::<EventDataTrb>().get_chain() != 0,
+        match self.trb_type() {
+            Some(TrbType::Normal) => self.cast::<NormalTrb>().get_chain() != 0,
+            Some(TrbType::DataStage) => self.cast::<DataStageTrb>().get_chain() != 0,
+            Some(TrbType::StatusStage) => self.cast::<StatusStageTrb>().get_chain() != 0,
+            Some(TrbType::Isoch) => self.cast::<IsochTrb>().get_chain() != 0,
+            Some(TrbType::Noop) => self.cast::<NoopTrb>().get_chain() != 0,
+            Some(TrbType::Link) => self.cast::<LinkTrb>().get_chain() != 0,
+            Some(TrbType::EventData) => self.cast::<EventDataTrb>().get_chain() != 0,
             _ => false,
         }
     }
@@ -355,6 +400,9 @@ pub enum TrbType {
     AddressDeviceCommand = 11,
     ConfigureEndpointCommand = 12,
     EvaluateContextCommand = 13,
+    ResetEndpointCommand = 14,
+    StopEndpointCommand = 15,
+    SetTRDequeuePointerCommand = 16,
     ResetDeviceCommand = 17,
     NoopCommand = 23,
     TransferEvent = 32,
@@ -379,6 +427,9 @@ impl PrimitiveEnum for TrbType {
             11 => Some(TrbType::AddressDeviceCommand),
             12 => Some(TrbType::ConfigureEndpointCommand),
             13 => Some(TrbType::EvaluateContextCommand),
+            14 => Some(TrbType::ResetEndpointCommand),
+            15 => Some(TrbType::StopEndpointCommand),
+            15 => Some(TrbType::SetTRDequeuePointerCommand),
             17 => Some(TrbType::ResetDeviceCommand),
             23 => Some(TrbType::NoopCommand),
             32 => Some(TrbType::TransferEvent),

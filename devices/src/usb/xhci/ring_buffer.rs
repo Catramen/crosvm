@@ -43,7 +43,7 @@ impl RingBuffer {
                 None => break,
             };
 
-            if addressed_trb.trb.trb_type().unwrap() == TrbType::Link {
+            if addressed_trb.trb.trb_type() == Some(TrbType::Link) {
                 let link_trb = addressed_trb.trb.cast::<LinkTrb>();
                 self.dequeue_pointer = GuestAddress(link_trb.get_ring_segment_pointer());
                 self.consumer_cycle_state =
