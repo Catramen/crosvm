@@ -81,6 +81,12 @@ pub const HCSPARAMS1_MAX_SLOTS_MASK: u32 = 0xFF;
 pub const SPCAP_PORT_COUNT_MASK: u32 = 0xFF00;
 pub const SPCAP_PORT_COUNT_OFFSET: u32 = 8;
 
+// Helper function for validating slot_id.
+pub fn valid_slot_id(slot_id: u8) -> bool {
+    // slot id count from 1.
+    slot_id > 0 && slot_id <= MAX_SLOTS
+}
+
 pub struct XHCIRegs {
     pub usbcmd: Register<u32>,
     pub usbsts: Register<u32>,

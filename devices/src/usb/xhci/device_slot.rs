@@ -449,6 +449,8 @@ impl DeviceSlot {
         }
     }
 
+    pub fn stop_endpoint(&self, 
+
     fn reset(&mut self) {
         for i in 0..self.transfer_ring_controllers.len() {
             self.transfer_ring_controllers[i] = None;
