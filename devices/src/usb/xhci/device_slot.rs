@@ -172,8 +172,9 @@ impl DeviceSlot {
             return false;
         }
         debug!("device slot {}: ding-dong. who is that? target = {}", self.slot_id, target);
-        let i = target - 1;
-        let transfer_ring_controller = match self.transfer_ring_controllers[i].as_ref() {
+        // See DCI in spec.
+        let endpoint_index = target - 1;
+        let transfer_ring_controller = match self.transfer_ring_controllers[endpoint_index].as_ref() {
             Some(tr) => tr,
             None => {
                 error!("Device endpoint is not inited");
@@ -181,8 +182,11 @@ impl DeviceSlot {
             }
         };
         let context = self.get_device_context();
-        if context.endpoint_context[target].get_endpoint_state() == EndpointState::Running as u8 {
+        if context.endpoint_context[endpoint_index].get_endpoint_state() == EndpointState::Running as u8 {
+            debug!("endpoint is started, start transfer ring");
             transfer_ring_controller.start();
+        } else {
+            error!("door bell rung when endpoint is not started");
         }
         return true;
     }

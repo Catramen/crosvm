@@ -175,7 +175,7 @@ impl CommandRingTrbHandler {
     }
 
     fn stop_endpoint(&self, atrb: &AddressedTrb, event_fd: EventFd) {
-        debug!("reseting device");
+        debug!("stop endpoint");
         let trb = atrb.trb.cast::<StopEndpointCommandTrb>();
         let slot_id = trb.get_slot_id();
         let endpoint_id = trb.get_endpoint_id();
@@ -195,7 +195,7 @@ impl CommandRingTrbHandler {
         }
     }
     fn set_tr_dequeue_ptr(&self, atrb: &AddressedTrb, event_fd: EventFd) {
-        debug!("reseting device");
+        debug!("stop endpoint");
         let trb = atrb.trb.cast::<SetTRDequeuePointerCommandTrb>();
         let slot_id = trb.get_slot_id();
         let endpoint_id = trb.get_trb_type();

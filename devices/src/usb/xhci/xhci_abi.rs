@@ -429,7 +429,7 @@ impl PrimitiveEnum for TrbType {
             13 => Some(TrbType::EvaluateContextCommand),
             14 => Some(TrbType::ResetEndpointCommand),
             15 => Some(TrbType::StopEndpointCommand),
-            15 => Some(TrbType::SetTRDequeuePointerCommand),
+            16 => Some(TrbType::SetTRDequeuePointerCommand),
             17 => Some(TrbType::ResetDeviceCommand),
             23 => Some(TrbType::NoopCommand),
             32 => Some(TrbType::TransferEvent),
