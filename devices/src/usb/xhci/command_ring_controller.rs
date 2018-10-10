@@ -46,15 +46,15 @@ impl CommandRingTrbHandler {
         self.slots.slot(slot_id).unwrap()
     }
 
-    fn command_completion_callback(&self, completion_code: TrbCompletionCode,
-                                 slot_id: u8, trb_addr: u64, event_fd: EventFd) {
-        self.interrupter
+    fn command_completion_callback(interrupter: &Arc<Mutex<Interrupter>>, completion_code: TrbCompletionCode,
+                                 slot_id: u8, trb_addr: u64, event_fd: &EventFd) {
+        interrupter
             .lock()
             .unwrap()
             .send_command_completion_trb(
                 completion_code,
                 slot_id,
-                GuestAddress(u64),
+                GuestAddress(trb_addr),
             );
         event_fd.write(1).unwrap();
     }
@@ -65,13 +65,15 @@ impl CommandRingTrbHandler {
             if self.slot(slot_id).enable() {
                 // Slot id starts from 1.
                 debug!("running enable slot command slot_id {}", i);
-                self.command_completion_callback(TrbCompletionCode::Success,
-                                                 slot_id, atrb.gpa, event_fd);
+                CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                                                                   TrbCompletionCode::Success,
+                                                                   slot_id, atrb.gpa, &event_fd);
                 return;
             }
         }
-        self.command_completion_callback(TrbCompletionCode::NoSlotsAvailableError,
-                                         0, atrb.gpa, event_fd);
+        CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                                                           TrbCompletionCode::NoSlotsAvailableError,
+                                                           0, atrb.gpa, &event_fd);
     }
 
     fn disable_slot(&self, atrb: &AddressedTrb, event_fd: EventFd) {
@@ -79,10 +81,17 @@ impl CommandRingTrbHandler {
         let trb = atrb.trb.cast::<DisableSlotCommandTrb>();
         let slot_id = trb.get_slot_id();
         if valid_slot_id(slot_id) {
-            self.slots.disable_slot(slot_id, atrb, event_fd);
+            let gpa = atrb.gpa;
+            let interrupter = self.interrupter.clone();
+            self.slots.disable_slot(slot_id, move |completion_code | {
+                CommandRingTrbHandler::command_completion_callback(&interrupter,
+                                                                   completion_code,
+                                                                   slot_id, gpa, &event_fd);
+            });
         } else {
-            self.command_completion_callback(TrbCompletionCode::TrbError,
-                                             slot_id, atrb.gpa, event_fd);
+            CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                                                               TrbCompletionCode::TrbError,
+                                                               slot_id, atrb.gpa, &event_fd);
         }
     }
 
@@ -97,7 +106,9 @@ impl CommandRingTrbHandler {
                 TrbCompletionCode::TrbError
             }
         };
-        self.command_completion_callback(completion_code, slot_id, atrb.gpa, event_fd);
+        CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                                                           completion_code,
+                                                           slot_id, atrb.gpa, &event_fd);
     }
 
     fn configure_endpoint(&self, atrb: &AddressedTrb, event_fd: EventFd) {
@@ -111,7 +122,8 @@ impl CommandRingTrbHandler {
                 TrbCompletionCode::TrbError
             }
         };
-        self.command_completion_callback(completion_code, slot_id, atrb.gpa, event_fd);
+        CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                                         completion_code, slot_id, atrb.gpa, &event_fd);
     }
 
     fn evaluate_context(&self, atrb: &AddressedTrb, event_fd: EventFd) {
@@ -126,7 +138,9 @@ impl CommandRingTrbHandler {
                 TrbCompletionCode::TrbError
             }
         };
-        self.command_completion_callback(completion_code, slot_id, atrb.gpa, event_fd);
+        CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                                                           completion_code,
+                                                           slot_id, atrb.gpa, &event_fd);
     }
 
     fn reset_device(&self, atrb: &AddressedTrb, event_fd: EventFd) {
@@ -134,10 +148,18 @@ impl CommandRingTrbHandler {
         let trb = atrb.trb.cast::<ResetDeviceCommandTrb>();
         let slot_id = trb.get_slot_id();
         if valid_slot_id(slot_id) {
-            self.slots.reset_slot(slot_id, atrb, event_fd);
+            let gpa = atrb.gpa;
+            let interrupter = self.interrupter.clone();
+            self.slots.reset_slot(slot_id, move |completion_code| {
+                CommandRingTrbHandler::command_completion_callback(&interrupter,
+                                                 completion_code,
+                                                 slot_id, gpa, &event_fd);
+
+            });
         } else {
-            self.command_completion_callback(TrbCompletionCode::TrbError,
-                                             slot_id, atrb.gpa, event_fd);
+            CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                                                               TrbCompletionCode::TrbError,
+                                                               slot_id, atrb.gpa, &event_fd);
         }
     }
 
@@ -146,10 +168,10 @@ impl CommandRingTrbHandler {
         let trb = atrb.trb.cast::<ResetEndpointCommandTrb>();
         let slot_id = trb.get_slot_id();
         let endpoint_id = trb.get_endpoint_id();
-        error!("getting reset endpoint for slot {}, ep {},\
-            linux driver only issue this when cmd ring stall. It should not happen here."
-            slot_id, endpoint_id);
-        self.command_completion_callback(TrbCompletionCode::Success, slot_id, atrb.gpa, event_fd);
+        error!("getting reset endpoint for slot {}, ep {}, linux driver only issue this when cmd ring stall. It should not happen here."
+            ,slot_id, endpoint_id);
+        CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+            TrbCompletionCode::Success, slot_id, atrb.gpa, &event_fd);
     }
 
     fn stop_endpoint(&self, atrb: &AddressedTrb, event_fd: EventFd) {
@@ -158,23 +180,39 @@ impl CommandRingTrbHandler {
         let slot_id = trb.get_slot_id();
         let endpoint_id = trb.get_endpoint_id();
         if valid_slot_id(slot_id) {
+            let gpa = atrb.gpa;
+            let interrupter = self.interrupter.clone();
+            self.slot(slot_id).stop_endpoint(endpoint_id, move |completion_code| {
+                CommandRingTrbHandler::command_completion_callback(&interrupter,
+                                                                   completion_code,
+                                                                   slot_id, gpa, &event_fd);
+
+            });
         } else {
             error!("stop endpoint trb has invalid slot id {}", slot_id);
-            self.command_completion_callback(TrbCompletionCode::TrbError, slot_id, atrb.gpa, event_fd);
+            CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                TrbCompletionCode::TrbError, slot_id, atrb.gpa, &event_fd);
         }
     }
     fn set_tr_dequeue_ptr(&self, atrb: &AddressedTrb, event_fd: EventFd) {
         debug!("reseting device");
         let trb = atrb.trb.cast::<SetTRDequeuePointerCommandTrb>();
         let slot_id = trb.get_slot_id();
-        let endpoit_id = trb.get_trb_type();
-        let dequeue_ptr = trb.get_dequeue_ptr();
-        if valid_slot_id(slot_id) {
-        } else {
-            error!("stop endpoint trb has invalid slot id {}", slot_id);
-            self.command_completion_callback(TrbCompletionCode::TrbError,
-                                             slot_id, atrb.gpa, event_fd);
-        }
+        let endpoint_id = trb.get_trb_type();
+        // See Set TR Dequeue Pointer Trb in spec.
+        let dequeue_ptr = trb.get_dequeue_ptr() << 4;
+        let completion_code = {
+            if valid_slot_id(slot_id) {
+                self.slot(slot_id).set_tr_dequeue_ptr(endpoint_id, dequeue_ptr)
+            } else {
+                error!("stop endpoint trb has invalid slot id {}", slot_id);
+                TrbCompletionCode::TrbError
+            }
+        };
+        CommandRingTrbHandler::command_completion_callback(
+            &self.interrupter,
+            TrbCompletionCode::TrbError,
+            slot_id, atrb.gpa, &event_fd);
     }
 
 }
@@ -194,34 +232,20 @@ impl TransferDescriptorHandler for CommandRingTrbHandler {
             Some(TrbType::EvaluateContextCommand) => self.evaluate_context(atrb, complete_event),
             Some(TrbType::ResetDeviceCommand) => self.reset_device(atrb, complete_event),
             Some(TrbType::NoopCommand) => {
-                self.interrupter
-                    .lock()
-                    .unwrap()
-                    .send_command_completion_trb(
-                        TrbCompletionCode::Success,
-                        0,
-                        GuestAddress(atrb.gpa),
-                    );
-                complete_event.write(1).unwrap();
+                CommandRingTrbHandler::command_completion_callback(&self.interrupter,
+                                                                   TrbCompletionCode::Success, 0,
+                                                                   atrb.gpa, &complete_event);
             },
-            Some(TrbType::ResetEndpointCommandTrb) => {
+            Some(TrbType::ResetEndpointCommand) => {
                 error!("Receiving reset endpoint command. \
                        It should only happend when cmd ring stall");
-                self.interrupter
-                    .lock()
-                    .unwrap()
-                    .send_command_completion_trb(
-                        TrbCompletionCode::TrbError,
-                        0,
-                        GuestAddress(atrb.gpa),
-                        );
-                complete_event.write(1).unwrap();
+                CommandRingTrbHandler::command_completion_callback(&self.interrupter, TrbCompletionCode::TrbError, 0,
+                                                                   atrb.gpa, &complete_event);
             },
-            Some(TrbType::StopEndpointCommandTrb) => {
-            },
-
-            Some(TybType::SetTRDequeuePointerCommandTrb) => {
-            },
+            Some(TrbType::StopEndpointCommand) =>
+                self.stop_endpoint(atrb, complete_event),
+            Some(TrbType::SetTRDequeuePointerCommand) =>
+                self.set_tr_dequeue_ptr(atrb, complete_event),
             _ => {
                 warn!(
                     // We are not handling type 14,15,16. See table 6.4.6.

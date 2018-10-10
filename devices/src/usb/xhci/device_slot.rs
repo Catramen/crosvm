@@ -12,7 +12,7 @@ use super::xhci_abi::{
     InputControlContext, SlotContext, TrbCompletionCode, DEVICE_CONTEXT_ENTRY_SIZE,
 };
 use super::usb_hub::UsbPort;
-use super::xhci_regs::MAX_SLOTS;
+use super::xhci_regs::{MAX_SLOTS, valid_slot_id};
 use std::mem::size_of;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -20,13 +20,20 @@ use sys_util::{EventFd, GuestAddress, GuestMemory};
 use usb::auto_callback::AutoCallback;
 use usb::event_loop::{EventHandler, EventLoop};
 
-/// 0: Control endpoint
-/// 1: Endpoint 1 out
-/// 2: Endpoint 1 in
-/// 3: Endpoint 2 out
+/// See spec 4.5.1 for dci.
+/// index 0: Control endpoint. Device Context Index: 1.
+/// index 1: Endpoint 1 out. Device Context Index: 2
+/// index 2: Endpoint 1 in. Device Context Index: 3.
+/// index 3: Endpoint 2 out. Device Context Index: 4
 /// ...
-/// 30: Endpoint 15 in
-pub const TOTAL_TRANSFER_RING_CONTROLLERS: usize = 31;
+/// index 30: Endpoint 15 in. Device Context Index: 31
+pub const TRANSFER_RING_CONTROLLERS_INDEX_END: usize = 31;
+pub const DCI_INDEX_END: usize = TRANSFER_RING_CONTROLLERS_INDEX_END + 1;
+pub const FIRST_TRANSFER_ENDPOINT_DCI: usize = 2;
+
+fn valid_endpoint_id(endpoint_id: u8) -> bool {
+    endpoint_id < DCI_INDEX_END as u8 && endpoint_id > 0
+}
 
 #[derive(Clone)]
 pub struct DeviceSlots {
@@ -62,7 +69,7 @@ impl DeviceSlots {
 
     /// Note that slot id starts from 0. Slot index start from 1.
     pub fn slot(&self, slot_id: u8) -> Option<MutexGuard<DeviceSlot>> {
-        if slot_id == 0 || slot_id > MAX_SLOTS as u8 {
+        if !valid_slot_id(slot_id) {
             error!("trying to index a wrong slot id {}, max slot = {}",
                    slot_id, MAX_SLOTS);
             None
@@ -92,14 +99,16 @@ impl DeviceSlots {
         }
     }
 
-    pub fn disable_slot(&self, slot_id: u8, atrb: &AddressedTrb, event_fd: EventFd) {
+    pub fn disable_slot<C: Fn(TrbCompletionCode) + 'static + Send>(&self, slot_id: u8,
+                                                                   cb: C) {
         debug!("device slot {} is disabling", slot_id);
-        DeviceSlot::disable(&self.slots[slot_id as usize - 1], atrb, event_fd);
+        DeviceSlot::disable(&self.slots[slot_id as usize - 1], cb);
     }
 
-    pub fn reset_slot(&self, slot_id: u8, atrb: &AddressedTrb, event_fd: EventFd) {
+    pub fn reset_slot<C: Fn(TrbCompletionCode) + 'static + Send>(&self, slot_id: u8,
+                                                                  cb: C) {
         debug!("device slot {} is reseting", slot_id);
-        DeviceSlot::reset_slot(&self.slots[slot_id as usize - 1], atrb, event_fd);
+        DeviceSlot::reset_slot(&self.slots[slot_id as usize - 1], cb);
     }
 }
 
@@ -125,7 +134,7 @@ impl DeviceSlot {
         mem: GuestMemory,
     ) -> Self {
         let mut transfer_ring_controllers = Vec::new();
-        for _i in 0..TOTAL_TRANSFER_RING_CONTROLLERS {
+        for _i in 0..TRANSFER_RING_CONTROLLERS_INDEX_END {
             transfer_ring_controllers.push(None);
         }
         DeviceSlot {
@@ -154,7 +163,7 @@ impl DeviceSlot {
     /// The stream ID must be zero for endpoints that do not have streams
     /// configured.
     pub fn ring_doorbell(&self, target: usize, _stream_id: u16) -> bool {
-        if target < 1 || target > 31 {
+        if !valid_endpoint_id(target as u8) {
             error!(
                 "device slot {}: Invalid target written to doorbell register. target: {}",
                 self.slot_id,
@@ -189,10 +198,10 @@ impl DeviceSlot {
         return true;
     }
 
-    pub fn disable(slot: &Arc<Mutex<DeviceSlot>>, atrb: &AddressedTrb, event_fd: EventFd) {
+    pub fn disable<C: Fn(TrbCompletionCode) + 'static + Send>(
+        slot: &Arc<Mutex<DeviceSlot>>, callback: C) {
         let s = slot.lock().unwrap();
         debug!("device slot {} is being disabled", s.slot_id);
-        let gpa = atrb.gpa;
         let slot_id = s.slot_id;
         if s.enabled {
             let interrupter = s.interrupter.clone();
@@ -207,21 +216,11 @@ impl DeviceSlot {
                 slot.set_device_context(device_context);
                 slot.reset();
                 debug!("device slot {}: all trc disabled, sending trb", slot.slot_id);
-                interrupter.lock().unwrap().send_command_completion_trb(
-                    TrbCompletionCode::Success,
-                    slot_id,
-                    GuestAddress(gpa),
-                );
-                event_fd.write(1).unwrap();
+                callback(TrbCompletionCode::Success);
             });
             s.stop_all_trc(auto_callback);
         } else {
-            s.interrupter.lock().unwrap().send_command_completion_trb(
-                TrbCompletionCode::SlotNotEnabledError,
-                slot_id,
-                GuestAddress(gpa),
-            );
-            event_fd.write(1).unwrap();
+            callback(TrbCompletionCode::SlotNotEnabledError);
         }
     }
 
@@ -404,17 +403,12 @@ impl DeviceSlot {
 
     // Reset the device slot to default state and deconfigures all but the
     // control endpoint.
-    pub fn reset_slot(slot: &Arc<Mutex<DeviceSlot>>, atrb: &AddressedTrb, event_fd: EventFd) {
+    pub fn reset_slot<C: Fn(TrbCompletionCode) + 'static + Send>(slot: &Arc<Mutex<DeviceSlot>>,
+                                                                 callback: C) {
         let s = slot.lock().unwrap();
-        let gpa = atrb.gpa;
         let state = s.state();
         if state != DeviceSlotState::Addressed && state != DeviceSlotState::Configured {
-            s.interrupter.lock().unwrap().send_command_completion_trb(
-                TrbCompletionCode::ContextStateError,
-                s.slot_id,
-                GuestAddress(gpa),
-            );
-            event_fd.write(1).unwrap();
+            callback(TrbCompletionCode::ContextStateError);
             return;
         }
 
@@ -430,12 +424,7 @@ impl DeviceSlot {
             ctx.slot_context.set_context_entries(1);
             ctx.slot_context.set_root_hub_port_number(0);
             s.set_device_context(ctx);
-            s.interrupter.lock().unwrap().send_command_completion_trb(
-                TrbCompletionCode::Success,
-                s.slot_id,
-                GuestAddress(gpa),
-            );
-            event_fd.write(1).unwrap();
+            callback(TrbCompletionCode::Success);
         });
         s.stop_all_trc(auto_callback);
     }
@@ -449,7 +438,44 @@ impl DeviceSlot {
         }
     }
 
-    pub fn stop_endpoint(&self, 
+    pub fn stop_endpoint<C: Fn(TrbCompletionCode) + 'static + Send>(
+        &self, endpoint_id: u8, cb: C) {
+        if !valid_endpoint_id(endpoint_id) {
+            error!("trb indexing wrong endpoint id");
+            cb(TrbCompletionCode::TrbError);
+            return;
+        }
+        let index = endpoint_id - 1;
+        match self.transfer_ring_controllers[index as usize] {
+            Some(ref trc) => {
+                let auto_cb = AutoCallback::new(move || {
+                    cb(TrbCompletionCode::Success);
+                });
+                trc.stop(auto_cb)
+            },
+            None => {
+                cb(TrbCompletionCode::ContextStateError);
+            }
+        }
+    }
+
+    pub fn set_tr_dequeue_ptr(&self, endpoint_id: u8, ptr: u64) -> TrbCompletionCode {
+        if !valid_endpoint_id(endpoint_id) {
+            error!("trb indexing wrong endpoint id");
+            return TrbCompletionCode::TrbError;
+        }
+        let index = endpoint_id - 1;
+        match &self.transfer_ring_controllers[index as usize] {
+            &Some(ref trc) => {
+                trc.set_dequeue_pointer(GuestAddress(ptr));
+                return TrbCompletionCode::Success;
+            },
+            &None => {
+                return TrbCompletionCode::ContextStateError;
+            }
+        }
+
+    }
 
     fn reset(&mut self) {
         for i in 0..self.transfer_ring_controllers.len() {
