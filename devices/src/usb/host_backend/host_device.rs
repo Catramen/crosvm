@@ -70,6 +70,8 @@ impl HostDevice {
                 // transfer right now.
                 if setup.get_direction().unwrap() ==
                     ControlRequestDataPhaseTransferDirection::DeviceToHost {
+                        // Control transfer works like yoyo. It submited to device and will be put
+                        // back when callback is done.
                         let mut control_transfer = locked.take().unwrap();
                         let myct = self.control_transfer.clone();
                         let tmp_transfer = transfer.clone();
@@ -200,9 +202,10 @@ impl HostDevice {
                 request_setup.get_standard_request().unwrap() != StandardControlRequest::SetAddress {
                     return None;
         }
-        // It's a standard, set_address, device request. We do nothing here.
+        // It's a standard, set_address, device request. We do nothing here. As descripted in XHCI
+        // spec. See set address command ring trb.
         unsafe {
-        debug!("Set address control transfer is received with address: {}", request_setup.value);
+            debug!("Set address control transfer is received with address: {}", request_setup.value);
         }
         Some(TransferStatus::Completed)
     }

@@ -56,7 +56,7 @@ impl TransferRingController {
         endpoint_id: u8,
     ) -> Arc<TransferRingController> {
         RingBufferController::create_controller(
-            format!("transfer ring {}:{}", slot_id, endpoint_id),
+            format!("transfer ring slot_{} ep_{}", slot_id, endpoint_id),
             mem.clone(),
             event_loop,
             TransferRingTrbHandler {
