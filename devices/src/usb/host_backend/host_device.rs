@@ -10,6 +10,7 @@ use usb_util::libusb_device::LibUsbDevice;
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, ControlTransferBuffer, control_transfer, TransferStatus};
 use usb_util::types::{UsbRequestSetup, ControlRequestDataPhaseTransferDirection, ControlRequestType, ControlRequestRecipient, StandardControlRequest};
+use usb_util::error::Error as LibUsbError;
 use super::usb_endpoint::UsbEndpoint;
 
 #[derive(PartialEq)]
@@ -34,10 +35,17 @@ pub struct HostDevice {
     host_claimed_interface: Vec<i32>,
 }
 
+impl Drop for HostDevice {
+    fn drop(&mut self) {
+        self.release_interfaces();
+        self.attach_host_drivers();
+    }
+}
+
 impl HostDevice {
     pub fn new(device: LibUsbDevice) -> HostDevice {
         let device_handle = device.open().unwrap();
-        HostDevice {
+        let mut device = HostDevice {
             endpoints: vec![],
             device: device,
             device_handle: device_handle,
@@ -45,6 +53,61 @@ impl HostDevice {
             control_transfer: Arc::new(Mutex::new(Some(control_transfer(0)))),
             claimed_interface: vec![],
             host_claimed_interface: vec![],
+        };
+        device.detach_host_drivers();
+        device
+    }
+
+    fn get_interface_number_of_active_config() -> u32 {
+        match self.device.get_active_config_descriptor() {
+            Err(e) => {
+                if e == LibUsbError::NotFound {
+                    debug!("device is in unconfigured state");
+                    0
+                } else {
+                    // device might be disconnected now.
+                    error!("unexpected error {:?}", e);
+                    0
+                }
+            },
+            Ok(descriptor) => descriptor.bNumInterfaces as u32,
+        }
+    }
+    fn detach_host_drivers(&mut self) {
+        for i in 0..get_interface_number_of_active_config() {
+            match self.device_handle.kernel_driver_active(i) {
+                Ok(true) => {
+                    if let Err(e) = self.device_handle.detach_kernel_driver(i) {
+                        error!("unexpectd error {:?}", e);
+                    } else {
+                        self.host_claimed_interface.push(i);
+                    }
+
+                },
+                Ok(false) => {
+                    debug!("no driver attached");
+                },
+                Err(e) => {
+                    error!("unexpected error {:?}", e);
+                }
+            }
+        }
+    }
+
+    fn release_interfaces(&mut self) {
+        for i in self.claimed_interface {
+            if let Err(e) = self.device_handle.release_interface(i) {
+                error!("could not release interface {:?}", e);
+            }
+        }
+        self.claimed_interface = Vec::new();
+    }
+
+    fn attach_host_drivers(&mut self) {
+        for i in self.host_claimed_interface {
+            if let Err(e) = self.attach_kernel_driver(i) {
+                error("could not attach host kernel {:?}", e);
+            }
         }
     }
 
@@ -258,17 +321,23 @@ impl HostDevice {
         Some(TransferStatus::Completed)
     }
 
-    fn release_interfaces(&self) {
-        for i in &self.claimed_interface {
-            self.device_handle.release_interface(*i).unwrap();
-        }
-
-    }
-
     fn claim_interfaces(&self) {
+        for i in 0..get_interface_number_of_active_config() {
+            match self.device_handle.claim_interface(i) {
+                Ok(()) => {
+                    self.claimed_interface.push(i);
+                },
+                Err(e) => {
+                    error!("unable to claim interface");
+                }
+            }
+        }
     }
 
-    fn create_endpoints(&self) {
+    fn create_endpoints(&mut self) {
+        self.endpoints = Vec::new();
+        match self.device.get_active_config_descriptor() {
+        }
     }
 
     fn delete_all_endpoints(&mut self) {

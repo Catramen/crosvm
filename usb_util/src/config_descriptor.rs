@@ -4,6 +4,7 @@
 
 use bindings;
 use bindings::libusb_config_descriptor;
+use std::ops::Deref;
 
 /// ConfigDescriptor wraps libusb_config_descriptor.
 /// TODO(jkwang) Add utility functions to make ConfigDescriptor actually useful.
@@ -28,5 +29,16 @@ impl ConfigDescriptor {
     pub unsafe fn new(descriptor: *mut libusb_config_descriptor) -> ConfigDescriptor {
         assert!(!descriptor.is_null());
         ConfigDescriptor { descriptor }
+    }
+}
+
+impl Deref for ConfigDescriptor {
+    type Target = libusb_config_descriptor;
+
+    fn deref(&self) -> &libusb_config_descriptor {
+        // Safe because 'self.descriptor' is valid.
+        unsafe {
+            &*(self.descriptor)
+        }
     }
 }

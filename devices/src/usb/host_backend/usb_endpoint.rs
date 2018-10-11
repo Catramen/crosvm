@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use usb::xhci::xhci_transfer::{XhciTransfer, EndpointDirection, XhciTransferType};
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
-use usb_util::types::{EndpointType};
+use usb_util::types::EndpointType;
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, BulkTransferBuffer, TransferStatus, bulk_transfer};
 
+/// Isochronous, Bulk or Interrupt endpoint.
 pub struct UsbEndpoint {
     device_handle: Arc<Mutex<DeviceHandle>>,
     endpoint_number: u8,
@@ -23,6 +24,7 @@ impl UsbEndpoint {
                direction: EndpointDirection,
                ty: EndpointType
                ) -> UsbEndpoint {
+        assert!(ty != EndpointType::Control);
         UsbEndpoint {
             device_handle,
             endpoint_number,
