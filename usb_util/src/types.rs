@@ -41,6 +41,13 @@ pub enum EndpointType {
     Interrupt,
 }
 
+/// Endpoint Directions.
+#[derive(PartialEq)]
+pub enum EndpointDirection {
+    HostToDevice = 0,
+    DeviceToHost = 1,
+}
+
 /// Offset of data phase transfer direction.
 pub const DATA_PHASE_DIRECTION_OFFSET: u8 = 7;
 /// Bit mask of data phase transfer direction.

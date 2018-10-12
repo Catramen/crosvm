@@ -41,7 +41,7 @@ impl LibUsbDevice {
         bindings::libusb_ref_device(device);
         LibUsbDevice {
             _context: ctx,
-            device: device,
+            device,
         }
     }
 

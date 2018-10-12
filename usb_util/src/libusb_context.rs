@@ -72,7 +72,7 @@ impl LibUsbContext {
 
         Ok(DeviceIter {
             context: self.inner.clone(),
-            list: list,
+            list,
             index: 0,
         })
     }
@@ -159,9 +159,7 @@ impl Iterator for DeviceIter {
                 return None;
             }
             self.index += 1;
-            Some(
-                 LibUsbDevice::new(self.context.clone(), *current_ptr),
-                )
+            Some(LibUsbDevice::new(self.context.clone(), *current_ptr))
         }
     }
 }

@@ -69,6 +69,10 @@ impl ControlTransferBuffer {
             data_buffer: [0; CONTROL_DATA_BUFFER_SIZE],
         }
     }
+
+    fn set_request_setup(&mut self, request_setup: &UsbRequestSetup) {
+        self.setup_buffer = request_setup.clone();
+    }
 }
 
 impl UsbTransferBuffer for ControlTransferBuffer {
@@ -136,17 +140,19 @@ impl<T: UsbTransferBuffer> Drop for UsbTransferInner<T> {
     }
 }
 
-/// UsbTransfer owns a libust_transfer, it's buffer and callback.
+/// UsbTransfer owns a libustbtransfer, it's buffer and callback.
 pub struct UsbTransfer<T: UsbTransferBuffer> {
     inner: Box<UsbTransferInner<T>>,
 }
 
 /// Build a control transfer.
 pub fn control_transfer(timeout: u32) -> UsbTransfer<ControlTransferBuffer> {
-    UsbTransfer::<ControlTransferBuffer>::new(0,
-                                              LIBUSB_TRANSFER_TYPE_CONTROL as u8,
-                                              timeout,
-                                              ControlTransferBuffer::new())
+    UsbTransfer::<ControlTransferBuffer>::new(
+        0,
+        LIBUSB_TRANSFER_TYPE_CONTROL as u8,
+        timeout,
+        ControlTransferBuffer::new(),
+    )
 }
 
 /// Build a data transfer.
@@ -155,7 +161,8 @@ pub fn bulk_transfer(endpoint: u8, timeout: u32, size: usize) -> UsbTransfer<Bul
         endpoint,
         LIBUSB_TRANSFER_TYPE_BULK as u8,
         timeout,
-        BulkTransferBuffer::new(size))
+        BulkTransferBuffer::new(size),
+    )
 }
 
 impl<T: UsbTransferBuffer> UsbTransfer<T> {
@@ -165,7 +172,7 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
         // Just panic on OOM.
         assert!(!transfer.is_null());
         let inner = Box::new(UsbTransferInner::<T> {
-            transfer: transfer,
+            transfer,
             callback: None,
             buffer,
         });
@@ -197,18 +204,14 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
     pub fn actual_length(&self) -> i32 {
         let transfer = self.inner.transfer;
         // Safe because inner.transfer is valid memory.
-        unsafe {
-            (*transfer).actual_length
-        }
+        unsafe { (*transfer).actual_length }
     }
 
     /// Get the transfer status of this transfer.
     pub fn status(&self) -> TransferStatus {
         let transfer = self.inner.transfer;
         // Safe because inner.transfer is valid memory.
-        unsafe {
-            TransferStatus::from((*transfer).status)
-        }
+        unsafe { TransferStatus::from((*transfer).status) }
     }
 
     /// Submit this transfer to device handle. 'self' is consumed. On success, the memory will be
@@ -298,7 +301,7 @@ mod tests {
     fn submit_transfer_no_callback_test() {
         let t = control_transfer(0);
         test_utils::fake_submit_transfer(t);
-        let t = bulk_transfer(0, 0);
+        let t = bulk_transfer(0, 0, 1);
         test_utils::fake_submit_transfer(t);
     }
 
