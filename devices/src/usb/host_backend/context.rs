@@ -50,6 +50,7 @@ impl Context {
         for device in self.context.get_device_iter().unwrap() {
             if device.get_bus_number() == bus &&
                 device.get_address() == addr {
+                    debug!("device found bus {}, addr {}", bus, addr);
                     return Some(device);
                 }
         }
@@ -85,3 +86,4 @@ impl LibUsbPollfdChangeHandler for PollfdChangeHandler {
         self.event_loop.remove_event_for_fd(fd);
     }
 }
+

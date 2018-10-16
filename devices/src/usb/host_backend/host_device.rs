@@ -170,6 +170,7 @@ impl HostDevice {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                 }
+                debug!("setup stage setup buffer {:?}", setup);
                 let mut locked = self.control_transfer.lock().unwrap();
                 // Copy request setup into control transfer buffer.
                 locked.as_mut().unwrap().mut_buffer().set_request_setup(&setup);
@@ -184,6 +185,7 @@ impl HostDevice {
                         let weak_control_transfer = Arc::downgrade(&self.control_transfer);
                         let tmp_transfer = xhci_transfer.clone();
                         control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
+                            debug!("setup token control transfer callback invoked");
                             let status = t.status();
                             let actual_length = t.actual_length();
                             if let Some(control_transfer) = weak_control_transfer.upgrade() {

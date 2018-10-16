@@ -301,6 +301,7 @@ impl DeviceSlot {
                 device_context.endpoint_context[0].get_dequeue_cycle_state() > 0,
             );
 
+        debug!("Setting endpoint 0 to running");
         device_context.endpoint_context[0].set_state(EndpointState::Running);
         self.set_device_context(device_context);
         TrbCompletionCode::Success
@@ -308,6 +309,7 @@ impl DeviceSlot {
 
     // Adds or dropbs multiple endpoints in the device slot.
     pub fn configure_endpoint(&mut self, trb: &ConfigureEndpointCommandTrb) -> TrbCompletionCode {
+        debug!("configuring endpoint");
         let input_control_context: InputControlContext = match trb.get_deconfigure() > 0 {
             true => {
                 // From section 4.6.6 of the xHCI spec:
@@ -491,6 +493,7 @@ impl DeviceSlot {
     }
 
     fn add_one_endpoint(&mut self, device_context_index: u8) {
+        debug!("adding one endpoint, device context index {}", device_context_index);
         let mut device_context = self.get_device_context();
         let transfer_ring_index = (device_context_index - 1) as usize;
         let trc = TransferRingController::new(

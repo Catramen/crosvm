@@ -102,7 +102,7 @@ pub enum StandardControlRequest {
 
 /// RequestSetup is first part of control transfer buffer.
 #[repr(C, packed)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct UsbRequestSetup {
     // USB Device Request. USB spec. rev. 2.0 9.3
     pub request_type: u8, // bmRequestType

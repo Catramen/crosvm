@@ -243,7 +243,8 @@ mod tests {
         let mem = setup_mem();
         let (l, j) = EventLoop::start();
         let controller =
-            RingBufferController::create_controller(mem, l.clone(), TestHandler { sender: tx });
+            RingBufferController::create_controller("".to_string(),
+            mem, l.clone(), TestHandler { sender: tx });
         controller.set_dequeue_pointer(GuestAddress(0x100));
         controller.set_consumer_cycle_state(false);
         controller.start();

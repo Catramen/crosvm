@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 use std::os::raw::c_void;
+use std::mem::size_of;
 
 use bindings::{
     libusb_alloc_transfer, libusb_device_handle, libusb_free_transfer, libusb_submit_transfer,
@@ -84,7 +85,7 @@ impl UsbTransferBuffer for ControlTransferBuffer {
         if self.setup_buffer.length as usize > CONTROL_DATA_BUFFER_SIZE {
             panic!("Setup packet has an oversize length");
         }
-        self.setup_buffer.length as i32
+        self.setup_buffer.length as i32 + size_of::<UsbRequestSetup>() as i32
     }
 }
 
@@ -271,7 +272,6 @@ pub unsafe extern "C" fn transfer_completion_callback<T: UsbTransferBuffer>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::size_of;
     use std::sync::{Arc, Mutex};
 
     #[test]
