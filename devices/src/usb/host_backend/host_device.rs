@@ -11,6 +11,7 @@ use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, ControlTransferBuffer, control_transfer, TransferStatus};
 use usb_util::types::{UsbRequestSetup, ControlRequestDataPhaseTransferDirection, ControlRequestType, ControlRequestRecipient, StandardControlRequest};
 use usb_util::error::Error as LibUsbError;
+use std::collections::HashMap;
 use super::usb_endpoint::UsbEndpoint;
 
 #[derive(PartialEq)]
@@ -23,16 +24,59 @@ pub enum ControlEndpointState {
     StatusStage,
 }
 
+// Types of host to device control requests. We want to handle it use libusb functions instead of
+// control transfers.
+enum HostToDeviceControlRequest {
+    SetAddress,
+    SetConfig,
+    SetInterface,
+    ClearFeature,
+    // It could still be some standard control request.
+    Other,
+}
+
+impl HostToDeviceControlRequest {
+    pub fn analyze_request_setup(request_setup: &UsbRequestSetup)
+        -> HostToDeviceControlRequest {
+            if request_setup.get_type().unwrap() == ControlRequestType::Standard &&
+                request_setup.get_recipient() == ControlRequestRecipient::Device &&
+                    request_setup.get_standard_request() ==
+                    Some(StandardControlRequest::SetAddress) {
+                        return HostToDeviceControlRequest::SetAddress;
+                    };
+            if request_setup.get_type().unwrap() == ControlRequestType::Standard &&
+                request_setup.get_recipient() == ControlRequestRecipient::Device &&
+                    request_setup.get_standard_request() ==
+                    Some(StandardControlRequest::SetConfiguration) {
+                        return HostToDeviceControlRequest::SetConfig;
+                    };
+            if request_setup.get_type().unwrap() == ControlRequestType::Standard &&
+                request_setup.get_recipient() == ControlRequestRecipient::Interface &&
+                    request_setup.get_standard_request() ==
+                    Some(StandardControlRequest::SetInterface) {
+                        return HostToDeviceControlRequest::SetInterface;
+                    };
+            if request_setup.get_type().unwrap() == ControlRequestType::Standard &&
+                request_setup.get_recipient() == ControlRequestRecipient::Endpoint &&
+                    request_setup.get_standard_request() ==
+                    Some(StandardControlRequest::ClearFeature) {
+                        return HostToDeviceControlRequest::ClearFeature;
+                    };
+            return HostToDeviceControlRequest::Other;
+    }
+}
+
 pub struct HostDevice {
     // Endpoints only contains data endpoints (1 to 30). Control transfers are handled at device
     // level.
     endpoints: Vec<UsbEndpoint>,
     device: LibUsbDevice,
-    device_handle: DeviceHandle,
+    device_handle: Arc<Mutex<DeviceHandle>>,
     ctl_ep_state: ControlEndpointState,
     control_transfer: Arc<Mutex<Option<UsbTransfer<ControlTransferBuffer>>>>,
-    claimed_interface: Vec<i32>,
-    host_claimed_interface: Vec<i32>,
+    alt_settings: HashMap<u16, u16>,
+    claimed_interfaces: Vec<i32>,
+    host_claimed_interfaces: Vec<i32>,
 }
 
 impl Drop for HostDevice {
@@ -44,43 +88,45 @@ impl Drop for HostDevice {
 
 impl HostDevice {
     pub fn new(device: LibUsbDevice) -> HostDevice {
-        let device_handle = device.open().unwrap();
+        let device_handle = Arc::new(Mutex::new(device.open().unwrap()));
         let mut device = HostDevice {
             endpoints: vec![],
-            device: device,
-            device_handle: device_handle,
+            device,
+            device_handle,
             ctl_ep_state: ControlEndpointState::StatusStage,
             control_transfer: Arc::new(Mutex::new(Some(control_transfer(0)))),
-            claimed_interface: vec![],
-            host_claimed_interface: vec![],
+            alt_settings: HashMap::new(),
+            claimed_interfaces: vec![],
+            host_claimed_interfaces: vec![],
         };
         device.detach_host_drivers();
         device
     }
 
-    fn get_interface_number_of_active_config() -> u32 {
+    fn get_interface_number_of_active_config(&self) -> i32 {
         match self.device.get_active_config_descriptor() {
-            Err(e) => {
-                if e == LibUsbError::NotFound {
-                    debug!("device is in unconfigured state");
-                    0
-                } else {
-                    // device might be disconnected now.
-                    error!("unexpected error {:?}", e);
-                    0
-                }
+            Err(LibUsbError::NotFound) => {
+                debug!("device is in unconfigured state");
+                0
             },
-            Ok(descriptor) => descriptor.bNumInterfaces as u32,
+            Err(e) => {
+                // device might be disconnected now.
+                error!("unexpected error {:?}", e);
+                0
+            },
+            Ok(descriptor) => descriptor.bNumInterfaces as i32,
         }
     }
     fn detach_host_drivers(&mut self) {
-        for i in 0..get_interface_number_of_active_config() {
-            match self.device_handle.kernel_driver_active(i) {
+        for i in 0..self.get_interface_number_of_active_config() {
+            match self.device_handle.lock().unwrap().kernel_driver_active(i) {
                 Ok(true) => {
-                    if let Err(e) = self.device_handle.detach_kernel_driver(i) {
+                    if let Err(e) =
+                        self.device_handle.lock().unwrap().detach_kernel_driver(i as i32) {
                         error!("unexpectd error {:?}", e);
                     } else {
-                        self.host_claimed_interface.push(i);
+                        debug!("host driver detached for interface {}", i);
+                        self.host_claimed_interfaces.push(i);
                     }
 
                 },
@@ -95,18 +141,18 @@ impl HostDevice {
     }
 
     fn release_interfaces(&mut self) {
-        for i in self.claimed_interface {
-            if let Err(e) = self.device_handle.release_interface(i) {
+        for i in &self.claimed_interfaces {
+            if let Err(e) = self.device_handle.lock().unwrap().release_interface(*i) {
                 error!("could not release interface {:?}", e);
             }
         }
-        self.claimed_interface = Vec::new();
+        self.claimed_interfaces = Vec::new();
     }
 
     fn attach_host_drivers(&mut self) {
-        for i in self.host_claimed_interface {
-            if let Err(e) = self.attach_kernel_driver(i) {
-                error("could not attach host kernel {:?}", e);
+        for i in &self.host_claimed_interfaces {
+            if let Err(e) = self.device_handle.lock().unwrap().attach_kernel_driver(*i) {
+                error!("could not attach host kernel {:?}", e);
             }
         }
     }
@@ -117,18 +163,17 @@ impl HostDevice {
             // before last transfer is handled.
             panic!("Last control transfer has not yet finished.");
         }
-        let transfer = Arc::new(transfer);
-        match transfer.get_transfer_type() {
+        let xhci_transfer = Arc::new(transfer);
+        match xhci_transfer.get_transfer_type() {
             XhciTransferType::SetupStage(setup) => {
                 if self.ctl_ep_state != ControlEndpointState::StatusStage {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                 }
                 let mut locked = self.control_transfer.lock().unwrap();
-                {
-                    let request_setup = &mut locked.as_mut().unwrap().mut_buffer().setup_buffer;
-                    *request_setup = setup.clone();
-                }
+                // Copy request setup into control transfer buffer.
+                locked.as_mut().unwrap().mut_buffer().set_request_setup(&setup);
+
                 // If the control transfer is device to host, we can go ahead submit the
                 // transfer right now.
                 if setup.get_direction().unwrap() ==
@@ -136,23 +181,27 @@ impl HostDevice {
                         // Control transfer works like yoyo. It submited to device and will be put
                         // back when callback is done.
                         let mut control_transfer = locked.take().unwrap();
-                        let myct = self.control_transfer.clone();
-                        let tmp_transfer = transfer.clone();
+                        let weak_control_transfer = Arc::downgrade(&self.control_transfer);
+                        let tmp_transfer = xhci_transfer.clone();
                         control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
                             let status = t.status();
                             let actual_length = t.actual_length();
-                            (*myct.lock().unwrap()) = Some(t);
-                            transfer.on_transfer_complete(status, actual_length as u32);
+                            if let Some(control_transfer) = weak_control_transfer.upgrade() {
+                                (*control_transfer.lock().unwrap()) = Some(t);
+                            }
+                            xhci_transfer.on_transfer_complete(status, actual_length as u32);
                         });
-                        match self.device_handle.submit_async_transfer(control_transfer) {
-                            Err((e, _t)) => {
+                        match self.device_handle.lock().unwrap().submit_async_transfer(control_transfer) {
+                            Err((e, t)) => {
                                 error!("fail to submit control transfer {:?}", e);
                                 tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
+                                // Put the transfer back.
+                                *locked = Some(t);
                             },
                             _ => {},
                         }
                 } else {
-                    transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                    xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
                 }
                 self.ctl_ep_state = ControlEndpointState::SetupStage;
             },
@@ -169,14 +218,14 @@ impl HostDevice {
                          Some(ControlRequestDataPhaseTransferDirection::HostToDevice) => {
                              // Read from dma to host buffer.
                              let bytes = buffer.read(&mut tbuffer.data_buffer) as u32;
-                             transfer.on_transfer_complete(TransferStatus::Completed, bytes);
+                             xhci_transfer.on_transfer_complete(TransferStatus::Completed, bytes);
                          },
                          Some(ControlRequestDataPhaseTransferDirection::DeviceToHost) => {
                              // For device to host transfer, it's already handled in setup stage.
                              // As ScatterGatherBuffer implementation handles buffer size, we can
                              // copy all buffer.
                              let bytes = buffer.write(&tbuffer.data_buffer) as u32;
-                             transfer.on_transfer_complete(TransferStatus::Completed, bytes);
+                             xhci_transfer.on_transfer_complete(TransferStatus::Completed, bytes);
                          },
                          _ => error!("Unknown transfer direction!"),
                  }
@@ -197,35 +246,47 @@ impl HostDevice {
                 };
                 match request_setup.get_direction() {
                     Some(ControlRequestDataPhaseTransferDirection::HostToDevice) => {
-                        // We handle some standard request with libusb api.
-                        let s = self.handle_standard_control_requested(&request_setup);
-                        if s.is_some() {
-                            transfer.on_transfer_complete(s.unwrap(), 0);
-                            return;
-                        }
-                        let mut locked = self.control_transfer.lock().unwrap();
-                        let mut control_transfer = locked.take().unwrap();
-                        let myct = self.control_transfer.clone();
-                        let tmp_transfer = transfer.clone();
-                        control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
-                            let status = t.status();
-                            // Use actual length soon.
-                            let _actual_length = t.actual_length();
-                            (*myct.lock().unwrap()) = Some(t);
-                            transfer.on_transfer_complete(status, 0);
-                        });
-                        match self.device_handle.submit_async_transfer(control_transfer) {
-                            Err((e, _t)) => {
-                                error!("fail to submit control transfer {:?}", e);
-                                tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
+                        match HostToDeviceControlRequest::analyze_request_setup(&request_setup) {
+                            HostToDeviceControlRequest::Other => {
+                                let mut locked = self.control_transfer.lock().unwrap();
+                                let mut control_transfer = locked.take().unwrap();
+                                let myct = self.control_transfer.clone();
+                                let tmp_transfer = xhci_transfer.clone();
+                                control_transfer.set_callback(
+                                    move |t: UsbTransfer<ControlTransferBuffer>| {
+                                        let status = t.status();
+                                        // Use actual length soon.
+                                        let _actual_length = t.actual_length();
+                                        (*myct.lock().unwrap()) = Some(t);
+                                        xhci_transfer.on_transfer_complete(status, 0);
+                                    });
+                                if let Err((e, t)) =
+                                    self.device_handle.lock().unwrap().submit_async_transfer(control_transfer) {
+                                        error!("fail to submit control transfer {:?}", e);
+                                        tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
+                                        *locked = Some(t);
+                                    };
                             },
-
-                            _ =>{},
-                        }
-
+                            HostToDeviceControlRequest::SetAddress => {
+                                let status = self.set_address(request_setup.value as u32);
+                                xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                            },
+                            HostToDeviceControlRequest::SetConfig => {
+                                let status = self.set_config(&request_setup);
+                                xhci_transfer.on_transfer_complete(status, 0);
+                            },
+                            HostToDeviceControlRequest::SetInterface => {
+                                let status = self.set_interface(&request_setup);
+                                xhci_transfer.on_transfer_complete(status, 0);
+                            },
+                            HostToDeviceControlRequest::ClearFeature => {
+                                let status = self.clear_feature(&request_setup);
+                                xhci_transfer.on_transfer_complete(status, 0);
+                            }
+                        };
                     },
                     Some(ControlRequestDataPhaseTransferDirection::DeviceToHost) => {
-                        transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                        xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
                     },
                     _ => error!("Unknown transfer direction!"),
                 }
@@ -238,94 +299,46 @@ impl HostDevice {
         }
     }
 
-    fn handle_standard_control_requested(&mut self, request_setup: &UsbRequestSetup)
-        -> Option<TransferStatus> {
-        let s = self.set_address_if_requested(request_setup);
-        if s.is_some() {
-            return s;
-        };
-        let s = self.set_config_if_requested(request_setup);
-        if s.is_some() {
-            return s;
-        };
-        let s = self.set_interface_if_requested(request_setup);
-        if s.is_some() {
-            return s;
-        };
-        let s = self.clear_feature_if_requested(request_setup);
-        if s.is_some() {
-            return s;
-        };
-        None
-    }
-
-    fn set_address_if_requested(&self, request_setup: &UsbRequestSetup) -> Option<TransferStatus> {
-        if request_setup.get_type().unwrap() != ControlRequestType::Standard ||
-            request_setup.get_recipient() != ControlRequestRecipient::Device ||
-                request_setup.get_standard_request().unwrap() != StandardControlRequest::SetAddress {
-                    return None;
-        }
-        // It's a standard, set_address, device request. We do nothing here. As descripted in XHCI
-        // spec. See set address command ring trb.
-        unsafe {
-            debug!("Set address control transfer is received with address: {}", request_setup.value);
-        }
-        Some(TransferStatus::Completed)
-    }
-
-    fn set_config_if_requested(&mut self, request_setup: &UsbRequestSetup) -> Option<TransferStatus> {
-        if request_setup.get_type().unwrap() != ControlRequestType::Standard ||
-            request_setup.get_recipient() != ControlRequestRecipient::Device ||
-                request_setup.get_standard_request().unwrap() != StandardControlRequest::SetConfiguration {
-                    return None;
-        }
+    fn set_config(&mut self, request_setup: &UsbRequestSetup) -> TransferStatus {
         // It's a standard, set_config, device request.
         let config = (request_setup.value & 0xff) as i32;
         debug!("Set config control transfer is received with config: {}", config);
         self.release_interfaces();
-        let cur_config = self.device_handle.get_active_configuration().unwrap();
+        let cur_config = self.device_handle.lock().unwrap().get_active_configuration().unwrap();
         debug!("Cur config is: {}", cur_config);
         if config != cur_config {
-            self.device_handle.set_active_configuration(config).unwrap();
+            self.device_handle.lock().unwrap().set_active_configuration(config).unwrap();
         }
         self.claim_interfaces();
         self.create_endpoints();
-        Some(TransferStatus::Completed)
+        TransferStatus::Completed
     }
 
-    fn set_interface_if_requested(&self, request_setup: &UsbRequestSetup) -> Option<TransferStatus> {
-        if request_setup.get_type().unwrap() != ControlRequestType::Standard ||
-            request_setup.get_recipient() != ControlRequestRecipient::Interface ||
-                request_setup.get_standard_request().unwrap() != StandardControlRequest::SetInterface {
-                    return None;
-        }
+    fn set_interface(&mut self, request_setup: &UsbRequestSetup) -> TransferStatus {
         // It's a standard, set_interface, interface request.
         let interface = request_setup.index;
         let alt_setting = request_setup.value;
-        self.device_handle.set_interface_alt_setting(interface as i32, alt_setting as i32).unwrap();
+        self.device_handle.lock().unwrap()
+            .set_interface_alt_setting(interface as i32, alt_setting as i32).unwrap();
+        self.alt_settings.insert(interface, alt_setting);
         self.create_endpoints();
-        Some(TransferStatus::Completed)
+        TransferStatus::Completed
     }
 
-    fn clear_feature_if_requested(&self, request_setup: &UsbRequestSetup) -> Option<TransferStatus> {
-        if request_setup.get_type().unwrap() != ControlRequestType::Standard ||
-            request_setup.get_recipient() != ControlRequestRecipient::Endpoint ||
-                request_setup.get_standard_request().unwrap() != StandardControlRequest::ClearFeature {
-                    return None;
-                }
+    fn clear_feature(&mut self, request_setup: &UsbRequestSetup) -> TransferStatus {
         // It's a standard, clear_feature, endpoint request.
         const STD_FEATURE_ENDPOINT_HALT: u16 = 0;
         if request_setup.value == STD_FEATURE_ENDPOINT_HALT {
-            self.device_handle.clear_halt(request_setup.index as u8).unwrap();
+            self.device_handle.lock().unwrap().clear_halt(request_setup.index as u8).unwrap();
         }
-        Some(TransferStatus::Completed)
+        TransferStatus::Completed
     }
 
-    fn claim_interfaces(&self) {
-        for i in 0..get_interface_number_of_active_config() {
-            match self.device_handle.claim_interface(i) {
+    fn claim_interfaces(&mut self) {
+        for i in 0..self.get_interface_number_of_active_config() {
+            match self.device_handle.lock().unwrap().claim_interface(i) {
                 Ok(()) => {
-                    self.claimed_interface.push(i);
+                    self.claimed_interfaces.push(i);
                 },
                 Err(e) => {
                     error!("unable to claim interface");
@@ -336,7 +349,30 @@ impl HostDevice {
 
     fn create_endpoints(&mut self) {
         self.endpoints = Vec::new();
-        match self.device.get_active_config_descriptor() {
+        let config_descriptor = match self.device.get_active_config_descriptor() {
+            Err(e) => {
+                // device might be disconnected now.
+                error!("unexpected error {:?}", e);
+                return;
+            },
+            Ok(descriptor) => descriptor,
+        };
+        for i in &self.claimed_interfaces {
+            let alt_setting = self.alt_settings.get(&(*i as u16)).unwrap_or(&0);
+            let interface = config_descriptor.
+                get_interface_descriptor(*i as u8, *alt_setting as i32).unwrap();
+            for ep_idx in 0..interface.bNumEndpoints {
+                let ep_dp = interface.endpoint_descriptor(ep_idx).unwrap();
+                let ep_num = ep_dp.get_endpoint_number();
+                if ep_num == 0 {
+                    debug!("endpoint 0 in endpoint descriptors");
+                    continue;
+                }
+                let direction = ep_dp.get_direction();
+                let ty = ep_dp.get_endpoint_type().unwrap();
+                self.endpoints.push(
+                    UsbEndpoint::new(self.device_handle.clone(), ep_num, direction, ty));
+            }
         }
     }
 
@@ -360,7 +396,7 @@ impl XhciBackendDevice for HostDevice {
             return;
         }
         for ep in &self.endpoints {
-            if ep.match_ep(transfer.get_endpoint_number(), &transfer.get_endpoint_dir()) {
+            if ep.match_ep(transfer.get_endpoint_number(), &transfer.get_transfer_dir()) {
                 ep.handle_transfer(transfer);
                 return;
             }
@@ -370,6 +406,8 @@ impl XhciBackendDevice for HostDevice {
     }
 
     fn set_address(&mut self, address: UsbDeviceAddress) {
-        debug!("Set address is invoked with address: {}", address);
+        // It's a standard, set_address, device request. We do nothing here. As descripted in XHCI
+        // spec. See set address command ring trb.
+        debug!("Set address control transfer is received with address: {}", address);
     }
 }

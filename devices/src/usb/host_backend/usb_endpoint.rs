@@ -4,9 +4,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use usb::xhci::xhci_transfer::{XhciTransfer, EndpointDirection, XhciTransferType};
+use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferType, TransferDirection};
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
-use usb_util::types::EndpointType;
+use usb_util::types::{EndpointType, EndpointDirection};
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, BulkTransferBuffer, TransferStatus, bulk_transfer};
 
@@ -33,8 +33,27 @@ impl UsbEndpoint {
         }
     }
 
-    pub fn match_ep(&self, endpoint_number: u8, dir: &EndpointDirection) -> bool {
-        (self.endpoint_number == endpoint_number) && (self.direction == *dir)
+    pub fn match_ep(&self, endpoint_number: u8, dir: &TransferDirection) -> bool {
+        if self.endpoint_number != endpoint_number {
+            return false;
+        }
+        match self.direction {
+            EndpointDirection::HostToDevice => {
+                if *dir == TransferDirection::Out {
+                    true
+                } else {
+                    false
+                }
+            }
+            EndpointDirection::DeviceToHost => {
+                if *dir == TransferDirection::In {
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     pub fn handle_transfer(&self, transfer: XhciTransfer) {
@@ -47,7 +66,7 @@ impl UsbEndpoint {
                 self.handle_bulk_transfer(transfer, buffer);
             },
             _ => {
-                error!("Wrong transfer type routed to Bulk endpoint.");
+                error!("Wrong transfer type, not handled.");
 
             },
         }
@@ -58,7 +77,7 @@ impl UsbEndpoint {
         let transfer = Arc::new(transfer);
         let tmp_transfer = transfer.clone();
         match self.direction {
-            EndpointDirection::In => {
+            EndpointDirection::HostToDevice => {
                 // Read data from ScatterGatherBuffer to a continuous memory.
                 buffer.read(bulk_transfer.mut_buffer().mut_slice());
                 bulk_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
@@ -74,7 +93,7 @@ impl UsbEndpoint {
                     _ =>{},
                 }
             },
-            EndpointDirection::Out => {
+            EndpointDirection::DeviceToHost => {
                 bulk_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
                     let status = t.status();
                     let actual_length = t.actual_length() as usize;

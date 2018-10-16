@@ -16,7 +16,7 @@ use super::scatter_gather_buffer::ScatterGatherBuffer;
 
 /// Type of usb endpoints.
 #[derive(PartialEq, Clone, Copy)]
-pub enum EndpointDirection {
+pub enum TransferDirection {
     In,
     Out,
     Control,
@@ -85,7 +85,7 @@ pub struct XhciTransfer {
     slot_id: u8,
     // id of endpoint in device slot.
     endpoint_id: u8,
-    endpoint_dir: EndpointDirection,
+    transfer_dir: TransferDirection,
     transfer_trbs: TransferDescriptor,
     transfer_completion_event: EventFd,
 }
@@ -102,13 +102,13 @@ impl XhciTransfer {
         completion_event: EventFd,
     ) -> Self {
         assert!(transfer_trbs.len() > 0);
-        let endpoint_dir = {
+        let transfer_dir = {
             if endpoint_id == 0 {
-                EndpointDirection::Control
+                TransferDirection::Control
             } else if (endpoint_id % 2) == 0 {
-                EndpointDirection::Out
+                TransferDirection::Out
             } else {
-                EndpointDirection::In
+                TransferDirection::In
             }
         };
         XhciTransfer {
@@ -118,7 +118,7 @@ impl XhciTransfer {
             transfer_completion_event: completion_event,
             slot_id,
             endpoint_id,
-            endpoint_dir,
+            transfer_dir,
             transfer_trbs,
         }
     }
@@ -131,8 +131,8 @@ impl XhciTransfer {
         self.endpoint_id / 2
     }
 
-    pub fn get_endpoint_dir(&self) -> EndpointDirection {
-        self.endpoint_dir
+    pub fn get_transfer_dir(&self) -> TransferDirection {
+        self.transfer_dir
     }
 
     pub fn get_first_trb_as<T: TrbCast>(&self) -> Option<&T> {

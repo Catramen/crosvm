@@ -70,7 +70,7 @@ impl ControlTransferBuffer {
         }
     }
 
-    fn set_request_setup(&mut self, request_setup: &UsbRequestSetup) {
+    pub fn set_request_setup(&mut self, request_setup: &UsbRequestSetup) {
         self.setup_buffer = request_setup.clone();
     }
 }
