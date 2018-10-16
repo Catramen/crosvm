@@ -256,14 +256,14 @@ impl DeviceSlot {
         self.port_id = device_context.slot_context.get_root_hub_port_number();
         debug!("port id {} is assigned to slot id {}", self.port_id, self.slot_id);
 
-        // Initialize the control endpoint.
+        // Initialize the control endpoint. Endpoint id = 1.
         self.transfer_ring_controllers[0] = Some(TransferRingController::new(
             self.mem.clone(),
             self.hub.get_port(self.port_id).unwrap(),
             self.event_loop.clone(),
             self.interrupter.clone(),
             self.slot_id,
-            0,
+            1,
         ));
 
         // Assign slot ID as device address if block_set_address_request is not set.
