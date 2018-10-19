@@ -77,6 +77,7 @@ pub enum UsbControlResult {
     Ok{port: u8},
     NoAvailablePort,
     NoSuchDevice,
+    FailToOpenDevice,
     Device{vid: u16, pid: u16},
 }
 

@@ -160,6 +160,7 @@ impl XhciTransfer {
             if atrb.trb.interrupt_on_completion() {
                 // For details about event data trb and EDTLA, see spec 4.11.5.2.
                 if atrb.trb.trb_type().unwrap() == TrbType::EventData {
+                    debug!("on transfer complete event data");
                     let tlength: u32 = min(edtla, bytes_transferred);
                     self.interrupter.lock().unwrap()
                         .send_transfer_event_trb(
@@ -174,6 +175,7 @@ impl XhciTransfer {
                     // For Short Transfer details, see xHCI spec 4.10.1.1.
                     let residual_transfer_length: u32 = edtla - bytes_transferred;
                     if edtla > bytes_transferred {
+                        debug!("on transfer complete short packet");
                         self.interrupter.lock().unwrap()
                             .send_transfer_event_trb(
                                 TrbCompletionCode::ShortPacket,
@@ -184,6 +186,7 @@ impl XhciTransfer {
                                 self.endpoint_id,
                                 );
                     } else {
+                        debug!("on transfer complete success");
                         self.interrupter.lock().unwrap()
                             .send_transfer_event_trb(
                                 TrbCompletionCode::Success,

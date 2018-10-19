@@ -87,12 +87,11 @@ impl Drop for HostDevice {
 }
 
 impl HostDevice {
-    pub fn new(device: LibUsbDevice) -> HostDevice {
-        let device_handle = Arc::new(Mutex::new(device.open().unwrap()));
+    pub fn new(device: LibUsbDevice, device_handle: DeviceHandle) -> HostDevice {
         let mut device = HostDevice {
             endpoints: vec![],
             device,
-            device_handle,
+            device_handle: Arc::new(Mutex::new(device_handle)),
             ctl_ep_state: ControlEndpointState::StatusStage,
             control_transfer: Arc::new(Mutex::new(Some(control_transfer(0)))),
             alt_settings: HashMap::new(),

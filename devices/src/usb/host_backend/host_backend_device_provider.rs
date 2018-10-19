@@ -97,7 +97,15 @@ impl EventHandler for ProviderInner {
         match cmd {
             UsbControlCommand::AttachDevice{ bus, addr } => {
                 let device = self.ctx.get_device(bus, addr).unwrap();
-                let device = Box::new(HostDevice::new(device));
+                let device_handle = match device.open() {
+                    Ok(handle) => handle,
+                    Err(e) => {
+                        error!("fail to open device {:?}", e);
+                        self.sock.send(&UsbControlResult::FailToOpenDevice).unwrap();
+                        return;
+                    }
+                };
+                let device = Box::new(HostDevice::new(device, device_handle));
                 debug!("new host device created");
                 let port = self.usb_hub.connect_backend(device);
                 debug!("connected");
