@@ -10,6 +10,7 @@ use bindings::{
     libusb_transfer, libusb_transfer_status, LIBUSB_TRANSFER_CANCELLED, LIBUSB_TRANSFER_COMPLETED,
     LIBUSB_TRANSFER_ERROR, LIBUSB_TRANSFER_NO_DEVICE, LIBUSB_TRANSFER_OVERFLOW,
     LIBUSB_TRANSFER_STALL, LIBUSB_TRANSFER_TIMED_OUT, LIBUSB_TRANSFER_TYPE_BULK,
+    LIBUSB_TRANSFER_TYPE_INTERRUPT,
     LIBUSB_TRANSFER_TYPE_CONTROL,
 };
 use error::Error;
@@ -161,6 +162,17 @@ pub fn bulk_transfer(endpoint: u8, timeout: u32, size: usize) -> UsbTransfer<Bul
     UsbTransfer::<BulkTransferBuffer>::new(
         endpoint,
         LIBUSB_TRANSFER_TYPE_BULK as u8,
+        timeout,
+        BulkTransferBuffer::new(size),
+    )
+}
+
+/// Build a data transfer.
+pub fn interrupt_transfer(endpoint: u8, timeout: u32, size: usize)
+    -> UsbTransfer<BulkTransferBuffer> {
+    UsbTransfer::<BulkTransferBuffer>::new(
+        endpoint,
+        LIBUSB_TRANSFER_TYPE_INTERRUPT as u8,
         timeout,
         BulkTransferBuffer::new(size),
     )

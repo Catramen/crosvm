@@ -8,7 +8,7 @@ use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferType, TransferDirection
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
 use usb_util::types::{EndpointType, EndpointDirection};
 use usb_util::device_handle::DeviceHandle;
-use usb_util::usb_transfer::{UsbTransfer, BulkTransferBuffer, TransferStatus, bulk_transfer};
+use usb_util::usb_transfer::{UsbTransfer, BulkTransferBuffer, TransferStatus, bulk_transfer, interrupt_transfer};
 
 /// Isochronous, Bulk or Interrupt endpoint.
 pub struct UsbEndpoint {
@@ -52,40 +52,56 @@ impl UsbEndpoint {
                     false
                 }
             }
-            _ => false,
         }
     }
 
     pub fn handle_transfer(&self, transfer: XhciTransfer) {
-        if self.ty != EndpointType::Bulk {
-            warn!("Endpoint type is not supporetd");
-            transfer.on_transfer_complete(TransferStatus::Error, 0);
-        }
-        match transfer.get_transfer_type() {
-            XhciTransferType::Normal(buffer) => {
-                self.handle_bulk_transfer(transfer, buffer);
-            },
+        let buffer = match transfer.get_transfer_type() {
+            XhciTransferType::Normal(buffer) => buffer,
             _ => {
                 error!("Wrong transfer type, not handled.");
-
+                transfer.on_transfer_complete(TransferStatus::Error, 0);
+                return;
             },
+        };
+
+        match self.ty {
+            EndpointType::Bulk => {
+                self.handle_bulk_transfer(transfer, buffer);
+            },
+            EndpointType::Interrupt => {
+                self.handle_interrupt_transfer(transfer, buffer);
+            },
+            _ => {
+                transfer.on_transfer_complete(TransferStatus::Error, 0);
+            }
         }
     }
 
-    fn handle_bulk_transfer(&self, transfer: XhciTransfer, buffer: ScatterGatherBuffer) {
-        let mut bulk_transfer = bulk_transfer(self.endpoint_number, 0, buffer.len());
-        let transfer = Arc::new(transfer);
-        let tmp_transfer = transfer.clone();
+    fn handle_bulk_transfer(&self, xhci_transfer: XhciTransfer, buffer: ScatterGatherBuffer) {
+        let usb_transfer = bulk_transfer(self.endpoint_number, 0, buffer.len());
+        self.do_handle_transfer(xhci_transfer, usb_transfer, buffer);
+    }
+
+    fn handle_interrupt_transfer(&self, xhci_transfer: XhciTransfer, buffer: ScatterGatherBuffer) {
+        let usb_transfer = interrupt_transfer(self.endpoint_number, 0, buffer.len());
+        self.do_handle_transfer(xhci_transfer, usb_transfer, buffer);
+    }
+
+    fn do_handle_transfer(&self, xhci_transfer: XhciTransfer,
+                       mut usb_transfer: UsbTransfer<BulkTransferBuffer>, buffer: ScatterGatherBuffer) {
+        let xhci_transfer = Arc::new(xhci_transfer);
+        let tmp_transfer = xhci_transfer.clone();
         match self.direction {
             EndpointDirection::HostToDevice => {
                 // Read data from ScatterGatherBuffer to a continuous memory.
-                buffer.read(bulk_transfer.mut_buffer().mut_slice());
-                bulk_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
+                buffer.read(usb_transfer.mut_buffer().mut_slice());
+                usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
                     let status = t.status();
                     let actual_length = t.actual_length();
-                    transfer.on_transfer_complete(status, actual_length as u32);
+                    xhci_transfer.on_transfer_complete(status, actual_length as u32);
                 });
-                match self.device_handle.lock().unwrap().submit_async_transfer(bulk_transfer) {
+                match self.device_handle.lock().unwrap().submit_async_transfer(usb_transfer) {
                     Err((e, _t)) => {
                         error!("fail to submit bulk transfer {:?}", e);
                         tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
@@ -94,7 +110,7 @@ impl UsbEndpoint {
                 }
             },
             EndpointDirection::DeviceToHost => {
-                bulk_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
+                usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
                     let status = t.status();
                     let actual_length = t.actual_length() as usize;
                     let copied_length = buffer.write(t.buffer().slice());
@@ -105,9 +121,9 @@ impl UsbEndpoint {
                             actual_length
                         }
                     };
-                    transfer.on_transfer_complete(status, actual_length as u32);
+                    xhci_transfer.on_transfer_complete(status, actual_length as u32);
                 });
-                match self.device_handle.lock().unwrap().submit_async_transfer(bulk_transfer) {
+                match self.device_handle.lock().unwrap().submit_async_transfer(usb_transfer) {
                     Err((e, _t)) => {
                         error!("fail to submit bulk transfer {:?}", e);
                         tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
@@ -115,10 +131,6 @@ impl UsbEndpoint {
                     _ =>{},
                 }
             },
-            _ => {
-                error!("Wrong direction for bulk endpoint");
-                transfer.on_transfer_complete(TransferStatus::Error, 0);
-            }
         }
     }
 }

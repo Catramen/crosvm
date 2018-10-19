@@ -98,7 +98,9 @@ impl EventHandler for ProviderInner {
             UsbControlCommand::AttachDevice{ bus, addr } => {
                 let device = self.ctx.get_device(bus, addr).unwrap();
                 let device = Box::new(HostDevice::new(device));
+                debug!("new host device created");
                 let port = self.usb_hub.connect_backend(device);
+                debug!("connected");
                 match port {
                     Some(port) => {
                         self.sock.send(&UsbControlResult::Ok{port}).unwrap();

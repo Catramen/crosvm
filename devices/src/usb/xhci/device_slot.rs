@@ -206,9 +206,7 @@ impl DeviceSlot {
         slot: &Arc<Mutex<DeviceSlot>>, callback: C) {
         let s = slot.lock().unwrap();
         debug!("device slot {} is being disabled", s.slot_id);
-        let slot_id = s.slot_id;
         if s.enabled {
-            let interrupter = s.interrupter.clone();
             let slot_weak = Arc::downgrade(slot);
             let auto_callback = AutoCallback::new(move || {
                 let slot_arc = slot_weak.upgrade().unwrap();

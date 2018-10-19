@@ -123,7 +123,7 @@ impl HostDevice {
                 Ok(true) => {
                     if let Err(e) =
                         self.device_handle.lock().unwrap().detach_kernel_driver(i as i32) {
-                        error!("unexpectd error {:?}", e);
+                        error!("unexpected error {:?}", e);
                     } else {
                         debug!("host driver detached for interface {}", i);
                         self.host_claimed_interfaces.push(i);
@@ -270,18 +270,22 @@ impl HostDevice {
                                     };
                             },
                             HostToDeviceControlRequest::SetAddress => {
-                                let status = self.set_address(request_setup.value as u32);
+                                debug!("host device handling set address");
+                                self.set_address(request_setup.value as u32);
                                 xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
                             },
                             HostToDeviceControlRequest::SetConfig => {
+                                debug!("host device handling set config");
                                 let status = self.set_config(&request_setup);
                                 xhci_transfer.on_transfer_complete(status, 0);
                             },
                             HostToDeviceControlRequest::SetInterface => {
+                                debug!("host device handling set interface");
                                 let status = self.set_interface(&request_setup);
                                 xhci_transfer.on_transfer_complete(status, 0);
                             },
                             HostToDeviceControlRequest::ClearFeature => {
+                                debug!("host device handling clear feature");
                                 let status = self.clear_feature(&request_setup);
                                 xhci_transfer.on_transfer_complete(status, 0);
                             }
@@ -340,10 +344,11 @@ impl HostDevice {
         for i in 0..self.get_interface_number_of_active_config() {
             match self.device_handle.lock().unwrap().claim_interface(i) {
                 Ok(()) => {
+                    debug!("claimed interface {}", i);
                     self.claimed_interfaces.push(i);
                 },
                 Err(e) => {
-                    error!("unable to claim interface");
+                    error!("unable to claim interface {}, error {:?}", i, e);
                 }
             }
         }

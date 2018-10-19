@@ -54,7 +54,7 @@ impl Context {
                     return Some(device);
                 }
         }
-
+        error!("device not found bus {}, addr {}", bus, addr);
         None
     }
 }

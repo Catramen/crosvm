@@ -211,7 +211,7 @@ impl CommandRingTrbHandler {
         };
         CommandRingTrbHandler::command_completion_callback(
             &self.interrupter,
-            TrbCompletionCode::TrbError,
+            completion_code,
             slot_id, atrb.gpa, &event_fd);
     }
 
