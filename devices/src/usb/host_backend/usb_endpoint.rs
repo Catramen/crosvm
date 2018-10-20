@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferType, TransferDirection};
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
-use usb_util::types::{EndpointType, EndpointDirection};
+use usb_util::types::{EndpointType, EndpointDirection, ENDPOINT_DIRECTION_OFFSET};
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, BulkTransferBuffer, TransferStatus, bulk_transfer, interrupt_transfer};
 
@@ -31,6 +31,10 @@ impl UsbEndpoint {
             direction,
             ty,
         }
+    }
+
+    fn ep_addr(&self) -> u8 {
+        self.endpoint_number | ((self.direction as u8) << ENDPOINT_DIRECTION_OFFSET)
     }
 
     pub fn match_ep(&self, endpoint_number: u8, dir: &TransferDirection) -> bool {
@@ -79,12 +83,12 @@ impl UsbEndpoint {
     }
 
     fn handle_bulk_transfer(&self, xhci_transfer: XhciTransfer, buffer: ScatterGatherBuffer) {
-        let usb_transfer = bulk_transfer(self.endpoint_number, 0, buffer.len());
+        let usb_transfer = bulk_transfer(self.ep_addr(), 0, buffer.len());
         self.do_handle_transfer(xhci_transfer, usb_transfer, buffer);
     }
 
     fn handle_interrupt_transfer(&self, xhci_transfer: XhciTransfer, buffer: ScatterGatherBuffer) {
-        let usb_transfer = interrupt_transfer(self.endpoint_number, 0, buffer.len());
+        let usb_transfer = interrupt_transfer(self.ep_addr(), 0, buffer.len());
         self.do_handle_transfer(xhci_transfer, usb_transfer, buffer);
     }
 
@@ -96,6 +100,7 @@ impl UsbEndpoint {
             EndpointDirection::HostToDevice => {
                 // Read data from ScatterGatherBuffer to a continuous memory.
                 buffer.read(usb_transfer.mut_buffer().mut_slice());
+                debug!("out transfer ep_addr {:#x}, buffer len {}, data {:#x?}", self.ep_addr(), buffer.len(), usb_transfer.mut_buffer().mut_slice());
                 usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
                     let status = t.status();
                     let actual_length = t.actual_length();
@@ -110,9 +115,11 @@ impl UsbEndpoint {
                 }
             },
             EndpointDirection::DeviceToHost => {
+                debug!("in transfer ep_addr {:#x}, buffer len {}", self.ep_addr(), buffer.len());
                 usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
                     let status = t.status();
                     let actual_length = t.actual_length() as usize;
+                    debug!("in transfer data {:?}", t.buffer().slice());
                     let copied_length = buffer.write(t.buffer().slice());
                     let actual_length = {
                         if actual_length > copied_length {

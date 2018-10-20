@@ -42,11 +42,13 @@ pub enum EndpointType {
 }
 
 /// Endpoint Directions.
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum EndpointDirection {
     HostToDevice = 0,
     DeviceToHost = 1,
 }
+/// Endpoint direction offset.
+pub const ENDPOINT_DIRECTION_OFFSET: u8 = 7;
 
 /// Offset of data phase transfer direction.
 pub const DATA_PHASE_DIRECTION_OFFSET: u8 = 7;
