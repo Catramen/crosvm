@@ -15,7 +15,7 @@ use usb_util::usb_transfer::TransferStatus;
 use super::scatter_gather_buffer::ScatterGatherBuffer;
 
 /// Type of usb endpoints.
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum TransferDirection {
     In,
     Out,
@@ -91,6 +91,10 @@ pub struct XhciTransfer {
 }
 
 impl XhciTransfer {
+    pub fn print(&self) {
+        debug!("xhci_transfer slot id: {}, endpoint id {}, transfer_dir {:?}, transfer_trbs {:?}",
+               self.slot_id, self.endpoint_id, self.transfer_dir, self.transfer_trbs);
+    }
     /// Build a new XhciTransfer. Endpoint id is the id in xHCI device slot.
     pub fn new(
         mem: GuestMemory,

@@ -452,12 +452,14 @@ impl DeviceSlot {
         let index = endpoint_id - 1;
         match self.transfer_ring_controllers[index as usize] {
             Some(ref trc) => {
+                debug!("stopping endpoint");
                 let auto_cb = AutoCallback::new(move || {
                     cb(TrbCompletionCode::Success);
                 });
                 trc.stop(auto_cb)
             },
             None => {
+                error!("endpoint at index {} is not started", index);
                 cb(TrbCompletionCode::ContextStateError);
             }
         }

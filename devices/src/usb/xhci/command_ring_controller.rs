@@ -183,6 +183,7 @@ impl CommandRingTrbHandler {
             let gpa = atrb.gpa;
             let interrupter = self.interrupter.clone();
             self.slot(slot_id).stop_endpoint(endpoint_id, move |completion_code| {
+                debug!("stop endpoint callback");
                 CommandRingTrbHandler::command_completion_callback(&interrupter,
                                                                    completion_code,
                                                                    slot_id, gpa, &event_fd);

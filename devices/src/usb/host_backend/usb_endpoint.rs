@@ -101,7 +101,10 @@ impl UsbEndpoint {
                 // Read data from ScatterGatherBuffer to a continuous memory.
                 buffer.read(usb_transfer.mut_buffer().mut_slice());
                 debug!("out transfer ep_addr {:#x}, buffer len {}, data {:#x?}", self.ep_addr(), buffer.len(), usb_transfer.mut_buffer().mut_slice());
+                xhci_transfer.print();
                 usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
+                    debug!("out transfer calllback");
+                    xhci_transfer.print();
                     let status = t.status();
                     let actual_length = t.actual_length();
                     xhci_transfer.on_transfer_complete(status, actual_length as u32);
@@ -116,10 +119,13 @@ impl UsbEndpoint {
             },
             EndpointDirection::DeviceToHost => {
                 debug!("in transfer ep_addr {:#x}, buffer len {}", self.ep_addr(), buffer.len());
+                xhci_transfer.print();
+                let addr = self.ep_addr();
                 usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
+                    xhci_transfer.print();
+                    debug!("ep {:#x} in transfer data {:?}", addr,  t.buffer().slice());
                     let status = t.status();
                     let actual_length = t.actual_length() as usize;
-                    debug!("in transfer data {:?}", t.buffer().slice());
                     let copied_length = buffer.write(t.buffer().slice());
                     let actual_length = {
                         if actual_length > copied_length {

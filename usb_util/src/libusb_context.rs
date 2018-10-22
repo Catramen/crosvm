@@ -107,6 +107,12 @@ impl LibUsbContext {
         }
     }
 
+    pub fn handle_events(&self) {
+        unsafe {
+            bindings::libusb_handle_events(self.inner.context);
+        }
+    }
+
     /// Set a handler that could handle pollfd change events.
     pub fn set_pollfd_notifiers(&self, handler: Box<LibUsbPollfdChangeHandler>) {
         // LibUsbContext is alive when any libusb related function is called. It owns the handler,
