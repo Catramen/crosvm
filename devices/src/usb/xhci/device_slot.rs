@@ -361,6 +361,7 @@ impl DeviceSlot {
             || state == DeviceSlotState::Addressed
             || state == DeviceSlotState::Configured
         {
+            error!("wrong context state on evaluate context. state = {:?}", state);
             return TrbCompletionCode::ContextStateError;
         }
 
@@ -412,6 +413,7 @@ impl DeviceSlot {
         let s = slot.lock().unwrap();
         let state = s.state();
         if state != DeviceSlotState::Addressed && state != DeviceSlotState::Configured {
+            error!("reset slot failed due to context state error {:?}", state);
             callback(TrbCompletionCode::ContextStateError);
             return;
         }
@@ -477,6 +479,7 @@ impl DeviceSlot {
                 return TrbCompletionCode::Success;
             },
             &None => {
+                error!("set tr dequeue ptr failed due to no trc started");
                 return TrbCompletionCode::ContextStateError;
             }
         }

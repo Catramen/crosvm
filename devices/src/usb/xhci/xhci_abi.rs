@@ -467,7 +467,7 @@ impl PrimitiveEnum for TrbCompletionCode {
 }
 
 /// State of device slot.
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum DeviceSlotState {
     // The same value (0) is used for both the enabled and disabled states. See
     // xhci spec table 60.

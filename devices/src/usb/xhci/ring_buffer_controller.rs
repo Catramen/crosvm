@@ -101,9 +101,10 @@ where
 
     /// Stop the ring buffer asynchronously.
     pub fn stop(&self, callback: AutoCallback) {
-        debug!("{} stopped", self.name.as_str());
+        debug!("{} being stopped", self.name.as_str());
         let mut state = self.state.lock().unwrap();
         if *state == RingBufferState::Stopped {
+            debug!("{} is already stopped", self.name.as_str());
             return;
         }
         *state = RingBufferState::Stopping;
