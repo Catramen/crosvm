@@ -80,7 +80,14 @@ impl EventLoop {
                         }
                     } else {
                         let fd = event.token() as RawFd;
-                        match fd_callbacks.get(&fd).unwrap().upgrade() {
+                        let cb = match fd_callbacks.get(&fd) {
+                            Some(cb) => cb.clone(),
+                            None => {
+                                warn!("callback already removed");
+                                continue;
+                            },
+                        };
+                        match cb.upgrade() {
                             Some(handler) => handler.on_event(fd),
                             // If the handler is already gone, we remove the fd.
                             None => {

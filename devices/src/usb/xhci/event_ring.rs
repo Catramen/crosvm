@@ -54,10 +54,16 @@ impl EventRing {
         if self.is_full().unwrap() == true {
             return Err(Error::EventRingFull);
         }
+        // Event is write twice to avoid race condition.
+        trb.set_cycle_bit(!self.producer_cycle_state);
+        self.mem
+            .write_obj_at_addr(trb, self.enqueue_pointer)
+            .expect("Fail to write Guest Memory");
         trb.set_cycle_bit(self.producer_cycle_state);
         self.mem
             .write_obj_at_addr(trb, self.enqueue_pointer)
             .expect("Fail to write Guest Memory");
+        debug!("event write to enqueue pointer {:#x} trb_count {}, {}",self.enqueue_pointer.0,  self.trb_count, trb.debug_str());
         self.enqueue_pointer = match self.enqueue_pointer.checked_add(size_of::<Trb>() as u64) {
             Some(addr) => addr,
             None => return Err(Error::InconstantState),

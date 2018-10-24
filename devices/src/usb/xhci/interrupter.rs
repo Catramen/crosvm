@@ -58,7 +58,6 @@ impl Interrupter {
             psctrb.set_completion_code(TrbCompletionCode::Success as u8);
             psctrb.set_trb_type(TrbType::PortStatusChangeEvent as u8);
         }
-        debug!(" send port status trb {}", &trb.debug_str());
         self.add_event(trb);
     }
 
@@ -78,7 +77,6 @@ impl Interrupter {
             ctrb.set_vf_id(0);
             ctrb.set_slot_id(slot_id);
         }
-        debug!(" send command completion trb {}", &trb.debug_str());
         self.add_event(trb);
     }
 
@@ -102,7 +100,6 @@ impl Interrupter {
             event_trb.set_endpoint_id(endpoint_id);
             event_trb.set_slot_id(slot_id);
         }
-        debug!(" send transfer event trb {}", &trb.debug_str());
         self.add_event(trb);
     }
 
