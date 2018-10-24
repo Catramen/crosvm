@@ -21,5 +21,6 @@ mod xhci_abi_schema;
 #[allow(dead_code)]
 mod xhci_regs;
 
+pub mod scatter_gather_buffer;
 pub mod xhci_backend_device;
 pub mod xhci_transfer;
