@@ -25,7 +25,7 @@ use rand::distributions::{IndependentSample, Range};
 use rand::thread_rng;
 
 use byteorder::{ByteOrder, LittleEndian};
-use devices::{self, PciDevice, VirtioPciDevice};
+use devices::{self, PciDevice, VirtioPciDevice, XhciController, HostBackendDeviceProvider};
 use io_jail::{self, Minijail};
 use kvm::*;
 use msg_socket::{MsgReceiver, MsgSender, UnlinkMsgSocket};
@@ -34,7 +34,7 @@ use qcow::{self, ImageType, QcowFile};
 use sys_util;
 use sys_util::*;
 use vhost;
-use vm_control::{VmRequest, VmResponse};
+use vm_control::{VmRequest, VmResponse, UsbControlSocket};
 
 use Config;
 use VirtIoDeviceInfo;
@@ -250,6 +250,7 @@ fn create_virtio_devs(
     _exit_evt: &EventFd,
     wayland_device_socket: UnixDatagram,
     balloon_device_socket: UnixDatagram,
+    usb_provider: HostBackendDeviceProvider,
 ) -> std::result::Result<Vec<(Box<PciDevice + 'static>, Option<Minijail>)>, Box<error::Error>> {
     static DEFAULT_PIVOT_ROOT: &'static str = "/var/empty";
 
@@ -628,6 +629,10 @@ fn create_virtio_devs(
         pci_devices.push((pci_dev, stub.jail));
     }
 
+    // Create xhci controller.
+    let usb_controller = XhciController::new(mem.clone(), usb_provider);
+    pci_devices.push((Box::new(usb_controller), Some(Minijail::new().unwrap())));
+
     Ok(pci_devices)
 }
 
@@ -772,12 +777,16 @@ pub fn run_config(cfg: Config) -> Result<()> {
         info!("crosvm entering multiprocess mode");
     }
 
+    let pci_devices: Vec<(Box<PciDevice + 'static>, Minijail)> = Vec::new();
+
+    let (usb_control_socket, usb_provider) = HostBackendDeviceProvider::create();
     // Masking signals is inherently dangerous, since this can persist across clones/execs. Do this
     // before any jailed devices have been spawned, so that we can catch any of them that fail very
     // quickly.
     let sigchld_fd = SignalFd::new(libc::SIGCHLD).map_err(Error::CreateSignalFd)?;
 
     let components = VmComponents {
+        pci_devices,
         memory_mb: (cfg.memory.unwrap_or(256) << 20) as u64,
         vcpu_count: cfg.vcpu_count.unwrap_or(1),
         kernel_image: File::open(cfg.kernel_path.as_path())
@@ -811,9 +820,10 @@ pub fn run_config(cfg: Config) -> Result<()> {
             e,
             wayland_device_socket,
             balloon_device_socket,
+            usb_provider
         )
     }).map_err(Error::BuildingVm)?;
-    run_control(linux, control_sockets, balloon_host_socket, sigchld_fd)
+    run_control(linux, control_sockets, balloon_host_socket, sigchld_fd, usb_control_socket)
 }
 
 fn run_control(
@@ -821,6 +831,7 @@ fn run_control(
     control_sockets: Vec<UnlinkMsgSocket<VmResponse, VmRequest>>,
     balloon_host_socket: UnixDatagram,
     sigchld_fd: SignalFd,
+    usb_control_socket: UsbControlSocket
 ) -> Result<()> {
     // Paths to get the currently available memory and the low memory threshold.
     const LOWMEM_MARGIN: &'static str = "/sys/kernel/mm/chromeos-low_mem/margin";
@@ -1061,12 +1072,14 @@ fn run_control(
                         match socket.recv() {
                             Ok(request) => {
                                 let mut running = true;
-                                let response = request.execute(
-                                    &mut linux.vm,
-                                    &mut linux.resources,
-                                    &mut running,
-                                    &balloon_host_socket,
-                                );
+                                debug!("Request: {:?}", request);
+                                let response =
+                                    request.execute(&mut linux.vm,
+                                                    &mut linux.resources,
+                                                    &mut running,
+                                                    &balloon_host_socket,
+                                                    &usb_control_socket);
+                                debug!("Response: {:?}", response);
                                 if let Err(e) = socket.send(&response) {
                                     error!("failed to send VmResponse: {:?}", e);
                                 }

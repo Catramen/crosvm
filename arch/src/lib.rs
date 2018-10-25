@@ -15,6 +15,7 @@ use std::fs::File;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::result;
 use std::sync::{Arc, Mutex};
+use sys_util::*;
 
 use devices::virtio::VirtioDevice;
 use devices::{
@@ -31,6 +32,7 @@ pub type Result<T> = result::Result<T, Box<std::error::Error>>;
 /// Holds the pieces needed to build a VM. Passed to `build_vm` in the `LinuxArch` trait below to
 /// create a `RunnableLinuxVm`.
 pub struct VmComponents {
+    pub pci_devices: Vec<(Box<PciDevice + 'static>,  Minijail)>,
     pub memory_mb: u64,
     pub vcpu_count: u32,
     pub kernel_image: File,
@@ -77,7 +79,7 @@ pub trait LinuxArch {
 pub enum DeviceRegistrationError {
     /// Could not allocate IO space for the device.
     AllocateIoAddrs(PciDeviceError),
-    /// Could not allocate an IRQ number.
+    /// Could not allocat an IRQ number.
     AllocateIrq,
     /// Could not create the mmio device to wrap a VirtioDevice.
     CreateMmioDevice(sys_util::Error),

@@ -13,8 +13,9 @@
 extern crate byteorder;
 extern crate kvm;
 extern crate libc;
-extern crate resources;
+#[macro_use]
 extern crate sys_util;
+extern crate resources;
 #[macro_use]
 extern crate msg_socket;
 
@@ -24,33 +25,16 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixDatagram;
 use std::result;
 
-use libc::{EINVAL, ENODEV};
+use libc::{EINVAL, ENODEV, EIO};
 
 use byteorder::{LittleEndian, WriteBytesExt};
 use kvm::{Datamatch, IoeventAddress, Vm};
-use msg_socket::{MsgError, MsgOnSocket, MsgResult};
+use msg_socket::{MsgError, MsgOnSocket, MsgResult, MsgSocket, MsgSender, MsgReceiver};
 use resources::{GpuMemoryDesc, SystemAllocator};
 use sys_util::{Error as SysError, EventFd, GuestAddress, MemoryMapping, MmapError, Result};
 
-#[derive(Debug, PartialEq)]
-/// An error during a request or response transaction.
-pub enum VmControlError {
-    /// Error while sending a request or response.
-    Send(SysError),
-    /// Error while receiving a request or response.
-    Recv(SysError),
-    /// The type of a received request or response is unknown.
-    InvalidType,
-    /// There was not the expected amount of data when receiving a request or response. The inner
-    /// value is how much data was read.
-    BadSize(usize),
-    /// There was no associated file descriptor received for a request that expected it.
-    ExpectFd,
-}
-
-pub type VmControlResult<T> = result::Result<T, VmControlError>;
-
 /// A file descriptor either borrowed or owned by this.
+#[derive(Debug)]
 pub enum MaybeOwnedFd {
     /// Owned by this enum variant, and will be destructed automatically if not moved out.
     Owned(File),
@@ -86,10 +70,28 @@ impl MsgOnSocket for MaybeOwnedFd {
     }
 }
 
+#[derive(MsgOnSocket, Debug)]
+pub enum UsbControlCommand {
+    AttachDevice{bus: u8, addr: u8},
+    DetachDevice{port: u8},
+    ListDevice{port: u8},
+}
+
+#[derive(MsgOnSocket, Debug)]
+pub enum UsbControlResult {
+    Ok{port: u8},
+    NoAvailablePort,
+    NoSuchDevice,
+    FailToOpenDevice,
+    Device{vid: u16, pid: u16},
+}
+
+pub type UsbControlSocket = MsgSocket<UsbControlCommand, UsbControlResult>;
+
 /// A request to the main process to perform some operation on the VM.
 ///
 /// Unless otherwise noted, each request should expect a `VmResponse::Ok` to be received on success.
-#[derive(MsgOnSocket)]
+#[derive(MsgOnSocket, Debug)]
 pub enum VmRequest {
     /// Try to grow or shrink the VM's balloon.
     BalloonAdjust(i32),
@@ -111,6 +113,8 @@ pub enum VmRequest {
         height: u32,
         format: u32,
     },
+    /// Command to use controller.
+    UsbCommand(UsbControlCommand),
 }
 
 fn register_memory(
@@ -153,6 +157,7 @@ impl VmRequest {
         sys_allocator: &mut SystemAllocator,
         running: &mut bool,
         balloon_host_socket: &UnixDatagram,
+        usb_control_socket: &UsbControlSocket,
     ) -> VmResponse {
         *running = true;
         match self {
@@ -219,6 +224,20 @@ impl VmRequest {
                     Err(e) => VmResponse::Err(e),
                 }
             }
+            &VmRequest::UsbCommand(ref cmd) => {
+                let res = usb_control_socket.send(cmd);
+                if let Err(e) = res {
+                    error!("fail to send command to usb control socket {:?}", e);
+                    return VmResponse::Err(SysError::new(EIO));
+                }
+                match usb_control_socket.recv() {
+                    Ok(response) => VmResponse::UsbResponse(response),
+                    Err(e) => {
+                        error!("fail to recv command from usb control socket {:?}", e);
+                        return VmResponse::Err(SysError::new(EIO));
+                    }
+                }
+            }
         }
     }
 }
@@ -226,7 +245,7 @@ impl VmRequest {
 /// Indication of success or failure of a `VmRequest`.
 ///
 /// Success is usually indicated `VmResponse::Ok` unless there is data associated with the response.
-#[derive(MsgOnSocket)]
+#[derive(MsgOnSocket, Debug)]
 pub enum VmResponse {
     /// Indicates the request was executed successfully.
     Ok,
@@ -243,4 +262,6 @@ pub enum VmResponse {
         slot: u32,
         desc: GpuMemoryDesc,
     },
+    /// Results of usb control commands.
+    UsbResponse(UsbControlResult),
 }

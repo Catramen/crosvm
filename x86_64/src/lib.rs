@@ -428,9 +428,8 @@ impl X8664arch {
     /// This returns a minimal kernel command for this architecture
     fn get_base_linux_cmdline() -> kernel_cmdline::Cmdline {
         let mut cmdline = kernel_cmdline::Cmdline::new(CMDLINE_MAX_SIZE as usize);
-        cmdline
-            .insert_str("console=ttyS0 noacpi reboot=k panic=1")
-            .unwrap();
+        cmdline.insert_str("console=ttyS0 debug dyndbg='module xhci_hcd +p' loglevel=7 noacpi reboot=k panic=1").
+            unwrap();
         cmdline
     }
 

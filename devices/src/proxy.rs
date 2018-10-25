@@ -4,7 +4,8 @@
 
 //! Runs hardware devices in child processes.
 
-use libc::pid_t;
+use libc::{pid_t, dup2};
+use std::fs::File;
 
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixDatagram;
@@ -139,11 +140,26 @@ impl ProxyDevice {
         let pid = unsafe {
             match jail.fork(Some(&keep_fds)).map_err(Error::ForkingJail)? {
                 0 => {
+                    {
+                        let pid = process::id();
+                        let mut file = File::create(format!("{}_stderr.txt", pid)).unwrap();
+                        let fd = file.as_raw_fd();
+                        dup2(fd, 2);
+                    }
+                   // {
+                   //     let pid = process::id();
+                   //     let mut file = File::create(format!("{}_stdout.txt", pid)).unwrap();
+                   //     let fd = file.as_raw_fd();
+                   //     dup2(fd, 1);
+                   // }
+                    device.on_sandboxed();
                     child_proc(child_sock, &mut device);
                     // ! Never returns
                     process::exit(0);
-                }
-                p => p,
+                },
+                p => {
+                    p
+                },
             }
         };
 
