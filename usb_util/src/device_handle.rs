@@ -17,6 +17,8 @@ pub struct DeviceHandle {
     handle: *mut bindings::libusb_device_handle,
 }
 
+unsafe impl Send for DeviceHandle {}
+
 impl Drop for DeviceHandle {
     fn drop(&mut self) {
         // Safe because self.handle is a valid pointer to libusb_device_handle.

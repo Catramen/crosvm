@@ -20,6 +20,8 @@ pub struct LibUsbDevice {
     device: *mut bindings::libusb_device,
 }
 
+unsafe impl Send for LibUsbDevice {}
+
 impl Drop for LibUsbDevice {
     fn drop(&mut self) {
         // Safe because 'self.device' is a valid pointer and libusb_ref_device is invoked when
@@ -39,7 +41,7 @@ impl LibUsbDevice {
         bindings::libusb_ref_device(device);
         LibUsbDevice {
             _context: ctx,
-            device: device,
+            device,
         }
     }
 

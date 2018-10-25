@@ -41,11 +41,21 @@ pub enum EndpointType {
     Interrupt,
 }
 
+/// Endpoint Directions.
+#[derive(PartialEq, Clone, Copy)]
+pub enum EndpointDirection {
+    HostToDevice = 0,
+    DeviceToHost = 1,
+}
+/// Endpoint direction offset.
+pub const ENDPOINT_DIRECTION_OFFSET: u8 = 7;
+
 /// Offset of data phase transfer direction.
 pub const DATA_PHASE_DIRECTION_OFFSET: u8 = 7;
 /// Bit mask of data phase transfer direction.
 pub const DATA_PHASE_DIRECTION: u8 = 1u8 << DATA_PHASE_DIRECTION_OFFSET;
 // Types of data phase transfer directions.
+#[derive(PartialEq)]
 pub enum ControlRequestDataPhaseTransferDirection {
     HostToDevice = 0,
     DeviceToHost = 1,
@@ -94,7 +104,7 @@ pub enum StandardControlRequest {
 
 /// RequestSetup is first part of control transfer buffer.
 #[repr(C, packed)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct UsbRequestSetup {
     // USB Device Request. USB spec. rev. 2.0 9.3
     pub request_type: u8, // bmRequestType
