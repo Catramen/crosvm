@@ -17,6 +17,7 @@ mod ring_buffer_controller;
 mod mmio_register;
 #[allow(unused_imports, dead_code)]
 mod interrupter;
+mod intr_resample_handler;
 #[allow(unused_imports, dead_code)]
 mod mmio_space;
 pub mod scatter_gather_buffer;

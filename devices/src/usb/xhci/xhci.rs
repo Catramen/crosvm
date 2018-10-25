@@ -10,6 +10,7 @@ use usb::event_loop::EventLoop;
 use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 use usb::xhci::command_ring_controller::CommandRingController;
 use usb::xhci::device_slot::{DeviceSlot, DeviceSlots};
+use usb::xhci::intr_resample_handler::IntrResampleHandler;
 use usb::xhci::usb_hub::UsbHub;
 use usb::xhci::xhci_abi::Trb;
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
@@ -19,6 +20,7 @@ use usb::xhci::xhci_regs::*;
 pub struct Xhci {
     mem: GuestMemory,
     regs: XHCIRegs,
+    intr_resample_handler: Arc<IntrResampleHandler>,
     interrupter: Arc<Mutex<Interrupter>>,
     command_ring_controller: Arc<CommandRingController>,
     device_slots: DeviceSlots,
@@ -31,10 +33,17 @@ impl Xhci {
         mem: GuestMemory,
         device_provider: HostBackendDeviceProvider,
         irq_evt: EventFd,
+        irq_resample_evt: EventFd,
         regs: XHCIRegs,
     ) -> Arc<Self> {
         let (event_loop, _join_handle) = EventLoop::start();
-        let interrupter = Arc::new(Mutex::new(Interrupter::new(mem.clone(), irq_evt, &regs)));
+        let interrupter = Arc::new(Mutex::new(Interrupter::new(
+            mem.clone(),
+            irq_evt.try_clone().unwrap(),
+            &regs,
+        )));
+        let intr_resample_handler =
+            IntrResampleHandler::start(&event_loop, interrupter.clone(), irq_resample_evt, irq_evt);
         let hub = Arc::new(UsbHub::new(&regs, interrupter.clone()));
 
         let mut device_provider = device_provider;
@@ -56,6 +65,7 @@ impl Xhci {
         let xhci = Arc::new(Xhci {
             mem: mem.clone(),
             regs,
+            intr_resample_handler,
             interrupter,
             command_ring_controller,
             device_slots,

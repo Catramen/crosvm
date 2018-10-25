@@ -44,6 +44,10 @@ impl Interrupter {
         }
     }
 
+    pub fn er_not_empty(&self) -> bool {
+        !self.event_ring.is_empty().unwrap()
+    }
+
     fn add_event(&mut self, trb: Trb) {
         self.event_ring.add_event(trb).unwrap();
         self.pending = true;

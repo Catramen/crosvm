@@ -156,8 +156,7 @@ pub unsafe trait TrbCast: DataInit + TypedTrb {
         if Trb::from_slice(self.as_slice())
             .unwrap()
             .trb_type()
-            .unwrap()
-            != T::TY
+            .unwrap() != T::TY
         {
             return None;
         }
@@ -168,8 +167,7 @@ pub unsafe trait TrbCast: DataInit + TypedTrb {
         if Trb::from_slice(self.as_slice())
             .unwrap()
             .trb_type()
-            .unwrap()
-            != T::TY
+            .unwrap() != T::TY
         {
             return None;
         }

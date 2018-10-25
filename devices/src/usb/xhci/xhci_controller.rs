@@ -11,6 +11,7 @@ use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use sys_util::{EventFd, GuestMemory};
 use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
+use usb::xhci::intr_resample_handler::IntrResampleHandler;
 use usb::xhci::mmio_space::MMIOSpace;
 use usb::xhci::xhci::Xhci;
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
@@ -36,6 +37,7 @@ pub struct XhciController {
     bar0: u64, // bar0 in config_regs will be changed by guest. Not sure why.
     device_provider: Option<HostBackendDeviceProvider>,
     irq_evt: Option<EventFd>,
+    irq_resample_evt: Option<EventFd>,
     mmio: Option<MMIOSpace>,
     xhci: Option<Arc<Xhci>>,
 }
@@ -57,6 +59,7 @@ impl XhciController {
             bar0: 0,
             device_provider: Some(usb_provider),
             irq_evt: None,
+            irq_resample_evt: None,
             mmio: None,
             mem,
             xhci: None,
@@ -74,6 +77,7 @@ impl XhciController {
             self.mem.clone(),
             self.device_provider.take().unwrap(),
             self.irq_evt.take().unwrap(),
+            self.irq_resample_evt.take().unwrap(),
             regs,
         ));
     }
@@ -84,9 +88,16 @@ impl PciDevice for XhciController {
         let raw_fd = self.device_provider.as_ref().unwrap().keep_fds();
         vec![raw_fd]
     }
-    fn assign_irq(&mut self, irq_evt: EventFd, irq_num: u32, irq_pin: PciInterruptPin) {
+    fn assign_irq(
+        &mut self,
+        irq_evt: EventFd,
+        irq_resample_evt: EventFd,
+        irq_num: u32,
+        irq_pin: PciInterruptPin,
+    ) {
         self.config_regs.set_irq(irq_num as u8, irq_pin);
         self.irq_evt = Some(irq_evt);
+        self.irq_resample_evt = Some(irq_resample_evt);
     }
 
     fn allocate_io_bars(

@@ -393,7 +393,8 @@ impl DeviceSlot {
                 .mem
                 .read_obj_from_addr(GuestAddress(
                     trb.get_input_context_pointer() + DEVICE_CONTEXT_ENTRY_SIZE as u64,
-                )).unwrap();
+                ))
+                .unwrap();
             device_context
                 .slot_context
                 .set_interrupter_target(input_slot_context.get_interrupter_target());
@@ -410,7 +411,8 @@ impl DeviceSlot {
                 .mem
                 .read_obj_from_addr(GuestAddress(
                     trb.get_input_context_pointer() + 2 * DEVICE_CONTEXT_ENTRY_SIZE as u64,
-                )).unwrap();
+                ))
+                .unwrap();
             device_context.endpoint_context[0]
                 .set_max_packet_size(ep0_context.get_max_packet_size());
         }
@@ -562,8 +564,10 @@ impl DeviceSlot {
                 input_context_ptr
                     .checked_add(
                         (device_context_index as u64 + 1) * DEVICE_CONTEXT_ENTRY_SIZE as u64,
-                    ).unwrap(),
-            ).unwrap();
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
         debug!("context being copied {:?}", ctx);
         self.mem
             .write_obj_at_addr(
@@ -571,7 +575,8 @@ impl DeviceSlot {
                 self.get_device_context_addr()
                     .checked_add(device_context_index as u64 * DEVICE_CONTEXT_ENTRY_SIZE as u64)
                     .unwrap(),
-            ).unwrap();
+            )
+            .unwrap();
     }
 
     fn get_device_context_addr(&self) -> GuestAddress {
@@ -579,7 +584,8 @@ impl DeviceSlot {
             .mem
             .read_obj_from_addr(GuestAddress(
                 self.dcbaap.get_value() + size_of::<u64>() as u64 * self.slot_id as u64,
-            )).unwrap();
+            ))
+            .unwrap();
         GuestAddress(addr)
     }
 
