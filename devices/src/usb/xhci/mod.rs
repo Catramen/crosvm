@@ -24,4 +24,5 @@ mod xhci_regs;
 pub mod scatter_gather_buffer;
 pub mod usb_hub;
 pub mod xhci_backend_device;
+pub mod xhci_backend_device_provider;
 pub mod xhci_transfer;
