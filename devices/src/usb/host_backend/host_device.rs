@@ -3,9 +3,10 @@
 // found in the LICENSE file.
 
 use std::sync::{Arc, Mutex};
+use std::mem::drop;
 
 use usb::xhci::xhci_backend_device::{XhciBackendDevice, UsbDeviceAddress};
-use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferType};
+use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferState, XhciTransferType};
 use usb_util::libusb_device::LibUsbDevice;
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, ControlTransferBuffer, control_transfer, TransferStatus};
@@ -13,6 +14,7 @@ use usb_util::types::{UsbRequestSetup, ControlRequestDataPhaseTransferDirection,
 use usb_util::error::Error as LibUsbError;
 use std::collections::HashMap;
 use super::usb_endpoint::UsbEndpoint;
+use super::utils::{update_state, submit_transfer};
 
 #[derive(PartialEq)]
 pub enum ControlEndpointState {
@@ -185,22 +187,31 @@ impl HostDevice {
                         let tmp_transfer = xhci_transfer.clone();
                         control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
                             debug!("setup token control transfer callback invoked");
-                            let status = t.status();
-                            let actual_length = t.actual_length();
-                            if let Some(control_transfer) = weak_control_transfer.upgrade() {
-                                (*control_transfer.lock().unwrap()) = Some(t);
+                            update_state(&xhci_transfer, &t);
+                            let state = xhci_transfer.state().lock().unwrap();
+                            match *state {
+                                XhciTransferState::Cancelled => {
+                                    drop(state);
+                                    xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
+                                },
+                                XhciTransferState::Completed => {
+                                    let status = t.status();
+                                    let actual_length = t.actual_length();
+                                    if let Some(control_transfer) = weak_control_transfer.upgrade() {
+                                        (*control_transfer.lock().unwrap()) = Some(t);
+                                    }
+                                    drop(state);
+                                    xhci_transfer.on_transfer_complete(status, actual_length as u32);
+                                },
+                                _ => {
+                                    panic!("should not take this branch");
+                                }
                             }
-                            xhci_transfer.on_transfer_complete(status, actual_length as u32);
                         });
-                        match self.device_handle.lock().unwrap().submit_async_transfer(control_transfer) {
-                            Err((e, t)) => {
-                                error!("fail to submit control transfer {:?}", e);
-                                tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
-                                // Put the transfer back.
-                                *locked = Some(t);
-                            },
-                            _ => {},
-                        }
+                        if let Some(t) = submit_transfer(&tmp_transfer, &self.device_handle, control_transfer) {
+                            // Put the transfer back.
+                            *locked = Some(t);
+                        };
                 } else {
                     xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
                 }
@@ -255,18 +266,30 @@ impl HostDevice {
                                 let tmp_transfer = xhci_transfer.clone();
                                 control_transfer.set_callback(
                                     move |t: UsbTransfer<ControlTransferBuffer>| {
-                                        let status = t.status();
-                                        // Use actual length soon.
-                                        let _actual_length = t.actual_length();
-                                        (*myct.lock().unwrap()) = Some(t);
-                                        xhci_transfer.on_transfer_complete(status, 0);
+                                        update_state(&xhci_transfer, &t);
+                                        let state = xhci_transfer.state().lock().unwrap();
+                                        match *state {
+                                            XhciTransferState::Cancelled => {
+                                                drop(state);
+                                                xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
+                                            },
+                                            XhciTransferState::Completed => {
+                                                let status = t.status();
+                                                // Use actual length soon.
+                                                let _actual_length = t.actual_length();
+                                                (*myct.lock().unwrap()) = Some(t);
+                                                drop(state);
+                                                xhci_transfer.on_transfer_complete(status, 0);
+                                            },
+                                            _ => {
+                                                panic!("should not take this branch");
+                                            }
+                                        }
                                     });
-                                if let Err((e, t)) =
-                                    self.device_handle.lock().unwrap().submit_async_transfer(control_transfer) {
-                                        error!("fail to submit control transfer {:?}", e);
-                                        tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
-                                        *locked = Some(t);
-                                    };
+                                if let Some(t) = submit_transfer(&tmp_transfer, &self.device_handle, control_transfer) {
+                                    // Put the transfer back.
+                                    *locked = Some(t);
+                                };
                             },
                             HostToDeviceControlRequest::SetAddress => {
                                 debug!("host device handling set address");

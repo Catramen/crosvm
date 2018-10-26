@@ -4,9 +4,10 @@
 
 use std::os::raw::c_void;
 use std::mem::size_of;
+use std::sync::{Arc, Weak};
 
 use bindings::{
-    libusb_alloc_transfer, libusb_device_handle, libusb_free_transfer, libusb_submit_transfer,
+    libusb_alloc_transfer, libusb_cancel_transfer, libusb_device_handle, libusb_free_transfer, libusb_submit_transfer,
     libusb_transfer, libusb_transfer_status, LIBUSB_TRANSFER_CANCELLED, LIBUSB_TRANSFER_COMPLETED,
     LIBUSB_TRANSFER_ERROR, LIBUSB_TRANSFER_NO_DEVICE, LIBUSB_TRANSFER_OVERFLOW,
     LIBUSB_TRANSFER_STALL, LIBUSB_TRANSFER_TIMED_OUT, LIBUSB_TRANSFER_TYPE_BULK,
@@ -17,6 +18,7 @@ use error::Error;
 use types::UsbRequestSetup;
 
 /// Status of transfer.
+#[derive(PartialEq)]
 pub enum TransferStatus {
     Completed,
     Error,
@@ -125,21 +127,50 @@ impl UsbTransferBuffer for BulkTransferBuffer {
 
 type UsbTransferCompletionCallback<T> = Fn(UsbTransfer<T>) + Send + 'static;
 
-struct UsbTransferInner<T: UsbTransferBuffer> {
+// This wraps libusb_transfer pointer.
+struct LibUsbTransfer {
     transfer: *mut libusb_transfer,
-    callback: Option<Box<UsbTransferCompletionCallback<T>>>,
-    buffer: T,
 }
 
-unsafe impl<T: UsbTransferBuffer> Send for UsbTransferInner<T> {}
-
-impl<T: UsbTransferBuffer> Drop for UsbTransferInner<T> {
+impl Drop for LibUsbTransfer {
     fn drop(&mut self) {
         // Safe because 'self.transfer' is valid.
         unsafe {
             libusb_free_transfer(self.transfer);
         }
     }
+}
+
+unsafe impl Send for LibUsbTransfer {}
+unsafe impl Sync for LibUsbTransfer {}
+
+/// TransferCanceller can cancel the transfer.
+pub struct TransferCanceller {
+    transfer: Weak<LibUsbTransfer>,
+}
+
+impl TransferCanceller {
+    /// Return false if fail to cancel.
+    pub fn try_cancel(&self) -> bool {
+        match self.transfer.upgrade () {
+            Some(t) => {
+                // Safe because self.transfer has ownership of the raw pointer.
+                let r = unsafe { libusb_cancel_transfer(t.transfer) };
+                if r == 0 {
+                    true
+                } else {
+                    false
+                }
+            },
+            None => false,
+        }
+    }
+}
+
+struct UsbTransferInner<T: UsbTransferBuffer> {
+    transfer: Arc<LibUsbTransfer>,
+    callback: Option<Box<UsbTransferCompletionCallback<T>>>,
+    buffer: T,
 }
 
 /// UsbTransfer owns a libustbtransfer, it's buffer and callback.
@@ -185,17 +216,24 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
         // Just panic on OOM.
         assert!(!transfer.is_null());
         let inner = Box::new(UsbTransferInner::<T> {
-            transfer,
+            transfer: Arc::new(LibUsbTransfer {transfer}),
             callback: None,
             buffer,
         });
         // Safe because we inited transfer.
-        let raw_transfer: &mut libusb_transfer = unsafe { &mut *(inner.transfer) };
+        let raw_transfer: &mut libusb_transfer = unsafe { &mut *(inner.transfer.transfer) };
         raw_transfer.endpoint = endpoint;
         raw_transfer.type_ = type_;
         raw_transfer.timeout = timeout;
         raw_transfer.callback = Some(transfer_completion_callback::<T>);
         UsbTransfer { inner }
+    }
+
+    pub fn get_canceller(&self) -> TransferCanceller {
+        let weak_transfer = Arc::downgrade(&self.inner.transfer);
+        TransferCanceller {
+            transfer: weak_transfer
+        }
     }
 
     /// Set callback function for transfer completion.
@@ -215,14 +253,14 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
 
     /// Get actual length of data that was transferred.
     pub fn actual_length(&self) -> i32 {
-        let transfer = self.inner.transfer;
+        let transfer = self.inner.transfer.transfer;
         // Safe because inner.transfer is valid memory.
         unsafe { (*transfer).actual_length }
     }
 
     /// Get the transfer status of this transfer.
     pub fn status(&self) -> TransferStatus {
-        let transfer = self.inner.transfer;
+        let transfer = self.inner.transfer.transfer;
         // Safe because inner.transfer is valid memory.
         unsafe { TransferStatus::from((*transfer).status) }
     }
@@ -255,7 +293,7 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
     }
 
     fn into_raw(mut self) -> *mut libusb_transfer {
-        let transfer: *mut libusb_transfer = self.inner.transfer;
+        let transfer: *mut libusb_transfer = self.inner.transfer.transfer;
         // Safe because transfer is valid.
         unsafe {
             (*transfer).buffer = self.mut_buffer().as_raw_ptr();
@@ -284,7 +322,7 @@ pub unsafe extern "C" fn transfer_completion_callback<T: UsbTransferBuffer>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     #[test]
     fn check_control_buffer_size() {

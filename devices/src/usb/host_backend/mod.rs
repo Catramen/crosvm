@@ -9,3 +9,4 @@ pub mod host_backend_device_provider;
 pub mod host_device;
 #[allow(dead_code)]
 pub mod usb_endpoint;
+mod utils;

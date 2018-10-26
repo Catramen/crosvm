@@ -4,11 +4,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferType, TransferDirection};
+use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferState, XhciTransferType, TransferDirection};
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
 use usb_util::types::{EndpointType, EndpointDirection, ENDPOINT_DIRECTION_OFFSET};
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, BulkTransferBuffer, TransferStatus, bulk_transfer, interrupt_transfer};
+use super::utils::{submit_transfer, update_state};
 
 /// Isochronous, Bulk or Interrupt endpoint.
 pub struct UsbEndpoint {
@@ -104,18 +105,27 @@ impl UsbEndpoint {
                 xhci_transfer.print();
                 usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
                     debug!("out transfer calllback");
-                    xhci_transfer.print();
-                    let status = t.status();
-                    let actual_length = t.actual_length();
-                    xhci_transfer.on_transfer_complete(status, actual_length as u32);
+                    update_state(&xhci_transfer, &t);
+                    let state = xhci_transfer.state().lock().unwrap();
+                    match *state {
+                        XhciTransferState::Cancelled => {
+                            debug!("transfer has been cancelled");
+                            drop(state);
+                            xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
+                        }
+                        XhciTransferState::Completed => {
+                            xhci_transfer.print();
+                            let status = t.status();
+                            let actual_length = t.actual_length();
+                            drop(state);
+                            xhci_transfer.on_transfer_complete(status, actual_length as u32);
+                        }
+                        _ => {
+                            panic!("should not take this branch");
+                        }
+                    }
                 });
-                match self.device_handle.lock().unwrap().submit_async_transfer(usb_transfer) {
-                    Err((e, _t)) => {
-                        error!("fail to submit bulk transfer {:?}", e);
-                        tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
-                    },
-                    _ =>{},
-                }
+                submit_transfer(&tmp_transfer, &self.device_handle, usb_transfer);
             },
             EndpointDirection::DeviceToHost => {
                 debug!("in transfer ep_addr {:#x}, buffer len {}", self.ep_addr(), buffer.len());
@@ -124,25 +134,36 @@ impl UsbEndpoint {
                 usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
                     xhci_transfer.print();
                     debug!("ep {:#x} in transfer data {:?}", addr,  t.buffer().slice());
-                    let status = t.status();
-                    let actual_length = t.actual_length() as usize;
-                    let copied_length = buffer.write(t.buffer().slice());
-                    let actual_length = {
-                        if actual_length > copied_length {
-                            copied_length
-                        } else {
-                            actual_length
+                    update_state(&xhci_transfer, &t);
+                    let state = xhci_transfer.state().lock().unwrap();
+                    match *state {
+                        XhciTransferState::Cancelled => {
+                            debug!("transfer has been cancelled");
+                            drop(state);
+                            xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
                         }
-                    };
-                    xhci_transfer.on_transfer_complete(status, actual_length as u32);
+                        XhciTransferState::Completed => {
+                            let status = t.status();
+                            let actual_length = t.actual_length() as usize;
+                            let copied_length = buffer.write(t.buffer().slice());
+                            let actual_length = {
+                                if actual_length > copied_length {
+                                    copied_length
+                                } else {
+                                    actual_length
+                                }
+                            };
+                            drop(state);
+                            xhci_transfer.on_transfer_complete(status, actual_length as u32);
+                        }
+                        _ => {
+                            panic!("should not take this branch");
+                        }
+                    }
+
                 });
-                match self.device_handle.lock().unwrap().submit_async_transfer(usb_transfer) {
-                    Err((e, _t)) => {
-                        error!("fail to submit bulk transfer {:?}", e);
-                        tmp_transfer.on_transfer_complete(TransferStatus::Error, 0);
-                    },
-                    _ =>{},
-                }
+
+                submit_transfer(&tmp_transfer, &self.device_handle, usb_transfer);
             },
         }
     }

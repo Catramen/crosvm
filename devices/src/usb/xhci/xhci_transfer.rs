@@ -9,7 +9,8 @@ use super::xhci_abi::*;
 use super::xhci_backend_device::XhciBackendDevice;
 use super::xhci_regs::MAX_INTERRUPTER;
 use std::cmp::min;
-use std::sync::{Arc, Mutex};
+use std::mem::swap;
+use std::sync::{Arc, Weak, Mutex};
 use sys_util::{EventFd, GuestMemory};
 use usb_util::types::UsbRequestSetup;
 use usb_util::usb_transfer::TransferStatus;
@@ -20,6 +21,35 @@ pub enum TransferDirection {
     In,
     Out,
     Control,
+}
+
+/// Current state of xhci transfer.
+pub enum XhciTransferState {
+    Created,
+    Submitted(Box<Fn() + Send>),
+    Cancelling,
+    Cancelled,
+    Completed,
+}
+
+impl XhciTransferState {
+    /// Try to cancel this transfer, if it's possible.
+    pub fn try_cancel(&mut self) {
+        let mut tmp = XhciTransferState::Created;
+        swap(&mut tmp, self);
+        match tmp {
+            XhciTransferState::Submitted(cb) => {
+                *self = XhciTransferState::Cancelling;
+                cb();
+            },
+            XhciTransferState::Cancelling => {
+                error!("Another cancellation is already issued.");
+            }
+            _ => {
+                *self = XhciTransferState::Cancelled;
+            }
+        }
+    }
 }
 
 /// Type of a transfer received handled by transfer ring.
@@ -72,9 +102,84 @@ impl XhciTransferType {
     }
 }
 
+/// Xhci Transfer manager holds reference to all on going transfers. Can cancell them all if
+/// needed.
+#[derive(Clone)]
+pub struct XhciTransferManager {
+    transfers: Arc<Mutex<Vec<Weak<Mutex<XhciTransferState>>>>>,
+}
+
+impl XhciTransferManager {
+    /// Create a new manager.
+    pub fn new() -> XhciTransferManager {
+        XhciTransferManager {
+            transfers: Arc::new(Mutex::new(Vec::new()))
+        }
+    }
+
+    /// Build a new XhciTransfer. Endpoint id is the id in xHCI device slot.
+    pub fn create_transfer(&self,
+                           mem: GuestMemory,
+                           port: Arc<UsbPort>,
+                           interrupter: Arc<Mutex<Interrupter>>,
+                           slot_id: u8,
+                           endpoint_id: u8,
+                           transfer_trbs: TransferDescriptor,
+                           completion_event: EventFd,
+                           ) -> XhciTransfer {
+        assert!(transfer_trbs.len() > 0);
+        let transfer_dir = {
+            if endpoint_id == 0 {
+                TransferDirection::Control
+            } else if (endpoint_id % 2) == 0 {
+                TransferDirection::Out
+            } else {
+                TransferDirection::In
+            }
+        };
+        let t = XhciTransfer {
+            manager: self.clone(),
+            state: Arc::new(Mutex::new(XhciTransferState::Created)),
+            mem,
+            port,
+            interrupter,
+            transfer_completion_event: completion_event,
+            slot_id,
+            endpoint_id,
+            transfer_dir,
+            transfer_trbs,
+        };
+        self.transfers.lock().unwrap().push(Arc::downgrade(&t.state));
+        t
+    }
+
+    pub fn remove_transfer(&self, t: &Arc<Mutex<XhciTransferState>>) {
+        let mut transfers = self.transfers.lock().unwrap();
+        match transfers.iter().position(|ref wt|{
+            Arc::ptr_eq(&wt.upgrade().unwrap(), t)
+        }) {
+            None => error!("Try removing unknow transfer"),
+            Some(i) => {
+                transfers.swap_remove(i);
+            }
+        };
+    }
+
+    pub fn cancell_all(&self) {
+        self.transfers.lock().unwrap().iter().for_each(
+            |ref t| {
+                let state = t.upgrade().unwrap();
+                state.lock().unwrap().try_cancel();
+            }
+            );
+    }
+}
+
 /// Xhci transfer denote a transfer initiated by guest os driver. It will be submited to a
 /// XhciBackendDevice.
 pub struct XhciTransfer {
+    manager: XhciTransferManager,
+    state: Arc<Mutex<XhciTransferState>>,
     mem: GuestMemory,
     port: Arc<UsbPort>,
     interrupter: Arc<Mutex<Interrupter>>,
@@ -86,6 +191,12 @@ pub struct XhciTransfer {
     transfer_completion_event: EventFd,
 }
 
+impl Drop for XhciTransfer {
+    fn drop(&mut self) {
+        self.manager.remove_transfer(&self.state);
+    }
+}
+
 impl XhciTransfer {
     pub fn print(&self) {
         debug!(
@@ -93,37 +204,12 @@ impl XhciTransfer {
             self.slot_id, self.endpoint_id, self.transfer_dir, self.transfer_trbs
         );
     }
-    /// Build a new XhciTransfer. Endpoint id is the id in xHCI device slot.
-    pub fn new(
-        mem: GuestMemory,
-        port: Arc<UsbPort>,
-        interrupter: Arc<Mutex<Interrupter>>,
-        slot_id: u8,
-        endpoint_id: u8,
-        transfer_trbs: TransferDescriptor,
-        completion_event: EventFd,
-    ) -> Self {
-        assert!(transfer_trbs.len() > 0);
-        let transfer_dir = {
-            if endpoint_id == 0 {
-                TransferDirection::Control
-            } else if (endpoint_id % 2) == 0 {
-                TransferDirection::Out
-            } else {
-                TransferDirection::In
-            }
-        };
-        XhciTransfer {
-            mem,
-            port,
-            interrupter,
-            transfer_completion_event: completion_event,
-            slot_id,
-            endpoint_id,
-            transfer_dir,
-            transfer_trbs,
-        }
+
+    /// Get state of this transfer.
+    pub fn state(&self) -> &Arc<Mutex<XhciTransferState>> {
+        &self.state
     }
+
 
     pub fn get_transfer_type(&self) -> XhciTransferType {
         XhciTransferType::new(self.mem.clone(), self.transfer_trbs.clone())
@@ -143,12 +229,31 @@ impl XhciTransfer {
 
     /// This functions should be invoked when transfer is completed (or failed).
     pub fn on_transfer_complete(&self, status: TransferStatus, bytes_transferred: u32) {
-        if let TransferStatus::NoDevice = status {
-            debug!("device disconnected, detaching from port");
-            self.port.detach();
-            return;
+        match status {
+            TransferStatus::NoDevice => {
+                debug!("device disconnected, detaching from port");
+                self.port.detach();
+                // If the device is gone, we don't need to send transfer completion event, cause we
+                // are going to destroy everything related to this device anyway.
+                return;
+            },
+            TransferStatus::Cancelled => {
+                // TODO(jkwang) According to the spec, we should send a stopped event here. But kernel driver
+                // does not do anything meaningful when it sees a stopped event.
+                self.transfer_completion_event.write(1).unwrap();
+                return;
+            },
+            TransferStatus::Completed => {
+                self.transfer_completion_event.write(1).unwrap();
+            },
+            _ => {
+                // Transfer failed, we are not handling this correctly yet. Guest kernel might see
+                // short packets for in transfer and might think control transfer is successful. It
+                // will eventually find out device is in a wrong state.
+                self.transfer_completion_event.write(1).unwrap();
+            }
         }
-        self.transfer_completion_event.write(1).unwrap();
+
         let mut edtla: u32 = 0;
         // TODO(jkwang) Send event based on Status.
         // As noted in xHCI spec 4.11.3.1
@@ -213,6 +318,7 @@ impl XhciTransfer {
             }
             backend.as_mut().unwrap().submit_transfer(self);
         } else {
+            error!("invalid td on transfer ring");
             self.transfer_completion_event.write(1).unwrap();
         }
     }
@@ -239,5 +345,4 @@ impl XhciTransfer {
 
     fn trb_is_valid(atrb: &AddressedTrb) -> bool {
         atrb.trb.can_be_in_transfer_ring() && (atrb.trb.interrupter_target() < MAX_INTERRUPTER)
-    }
-}
+    } }

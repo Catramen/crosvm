@@ -13,7 +13,7 @@ use super::interrupter::Interrupter;
 use super::usb_hub::UsbPort;
 use super::xhci::Xhci;
 use super::xhci_abi::TransferDescriptor;
-use super::xhci_transfer::XhciTransfer;
+use super::xhci_transfer::{XhciTransfer, XhciTransferManager};
 
 pub type TransferRingController = RingBufferController<TransferRingTrbHandler>;
 
@@ -23,6 +23,7 @@ pub struct TransferRingTrbHandler {
     interrupter: Arc<Mutex<Interrupter>>,
     slot_id: u8,
     endpoint_id: u8,
+    transfer_manager: XhciTransferManager,
 }
 
 impl TransferDescriptorHandler for TransferRingTrbHandler {
@@ -35,7 +36,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
             "handling transfer descriptor in TransferRingController slot {}, endpoint {}",
             self.slot_id, self.endpoint_id
         );
-        let xhci_transfer = XhciTransfer::new(
+        let xhci_transfer = self.transfer_manager.create_transfer(
             self.mem.clone(),
             self.port.clone(),
             self.interrupter.clone(),
@@ -63,10 +64,11 @@ impl TransferRingController {
             event_loop,
             TransferRingTrbHandler {
                 mem,
+                port,
                 interrupter,
                 slot_id,
                 endpoint_id,
-                port,
+                transfer_manager: XhciTransferManager::new(),
             },
         )
     }
