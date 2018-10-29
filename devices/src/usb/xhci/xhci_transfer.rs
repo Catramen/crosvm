@@ -165,7 +165,7 @@ impl XhciTransferManager {
         };
     }
 
-    pub fn cancell_all(&self) {
+    pub fn cancel_all(&self) {
         self.transfers.lock().unwrap().iter().for_each(
             |ref t| {
                 let state = t.upgrade().unwrap();

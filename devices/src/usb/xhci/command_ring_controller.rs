@@ -225,13 +225,17 @@ impl CommandRingTrbHandler {
         if valid_slot_id(slot_id) {
             let gpa = atrb.gpa;
             let interrupter = self.interrupter.clone();
-            CommandRingTrbHandler::command_completion_callback(
-                &interrupter,
-                TrbCompletionCode::Success,
-                slot_id,
-                gpa,
-                &event_fd,
-            );
+            self.slot(slot_id).stop_endpoint(endpoint_id,
+                                             move |completion_code| {
+                                                 CommandRingTrbHandler::command_completion_callback(
+                                                     &interrupter,
+                                                     completion_code,
+                                                     slot_id,
+                                                     gpa,
+                                                     &event_fd,
+                                                     );
+
+                                             });
         } else {
             error!("stop endpoint trb has invalid slot id {}", slot_id);
             CommandRingTrbHandler::command_completion_callback(

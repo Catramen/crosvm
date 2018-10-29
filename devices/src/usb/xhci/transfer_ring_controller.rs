@@ -47,6 +47,10 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
         );
         xhci_transfer.send_to_backend_if_valid();
     }
+
+    fn stop(&self) {
+        self.transfer_manager.cancel_all();
+    }
 }
 
 impl TransferRingController {
