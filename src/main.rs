@@ -39,7 +39,6 @@ pub mod linux;
 #[cfg(feature = "plugin")]
 pub mod plugin;
 
-use std::fs::OpenOptions;
 use std::net;
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixDatagram;
@@ -47,6 +46,8 @@ use std::path::PathBuf;
 use std::string::String;
 use std::thread::sleep;
 use std::time::Duration;
+use std::fs::OpenOptions;
+use std::os::unix::io::IntoRawFd;
 
 use qcow::QcowFile;
 use sys_util::{getpid, kill_process_group, reap_child, syslog};
@@ -653,23 +654,37 @@ fn create_qcow2(mut args: std::env::Args) -> std::result::Result<(), ()> {
     Ok(())
 }
 
-fn parse_bus_id_addr(str: &str) -> Result<(u8, u8), ()> {
+fn parse_bus_id_addr(str: &str) -> Result<(u8, u8, u16, u16), ()> {
     let mut ids = str.split(":");
     let bus_id = ids.nth(0).ok_or(())?.parse::<u8>().map_err(|_e| ())?;
     let addr = ids.nth(0).ok_or(())?.parse::<u8>().map_err(|_e| ())?;
-    Ok((bus_id, addr))
+    let vid = ids.nth(0).ok_or(())?.parse::<u16>().map_err(|_e| ())?;
+    let pid = ids.nth(0).ok_or(())?.parse::<u16>().map_err(|_e| ())?;
+    Ok((bus_id, addr, vid, pid))
 }
 fn usb_attach(mut args: std::env::Args) -> std::result::Result<(), ()> {
     let val = args.nth(0).unwrap();
-    let (bus, addr) = match parse_bus_id_addr(&val) {
+    let (bus, addr, vid, pid) = match parse_bus_id_addr(&val) {
         Err(e) => {
             error!("failed to parse bus id and addr");
-            return Err(())
+            return Err(());
         },
-        Ok((bus_id, addr)) => (bus_id, addr),
+        Ok((bus_id, addr, vid, pid)) => (bus_id, addr, vid, pid),
     };
+    let dev_path = args.nth(0).unwrap();
     let mut return_result = Ok(());
     for socket_path in args {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&dev_path);
+        let file = match file {
+            Ok(f) => f,
+            Err(e) => {
+                error!("fail to open device");
+                return Err(());
+            },
+        };
         match UnixDatagram::unbound().and_then(|s| {
             s.connect(&socket_path)?;
             Ok(s)
@@ -677,7 +692,7 @@ fn usb_attach(mut args: std::env::Args) -> std::result::Result<(), ()> {
             Ok(s) => {
                 let sock = MsgSocket::<VmRequest, VmResponse>::new(s);
                 if let Err(e) = sock.send(&VmRequest::UsbCommand(UsbControlCommand::AttachDevice {
-                    bus, addr
+                    bus, addr, vid, pid, fd: file.into_raw_fd()
                 })) {
                     error!("failed to send usb attach request to socket at '{}': {:?}",
                            socket_path,

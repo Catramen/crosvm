@@ -95,9 +95,9 @@ impl EventHandler for ProviderInner {
     fn on_event(&self, _fd: RawFd) {
         let cmd = self.sock.recv().unwrap();
         match cmd {
-            UsbControlCommand::AttachDevice{ bus, addr } => {
-                let device = self.ctx.get_device(bus, addr).unwrap();
-                let device_handle = match device.open() {
+            UsbControlCommand::AttachDevice{ bus, addr, vid, pid, fd } => {
+                let device = self.ctx.get_device(bus, addr, vid, pid).unwrap();
+                let device_handle = match device.open_fd(fd) {
                     Ok(handle) => handle,
                     Err(e) => {
                         error!("fail to open device {:?}", e);

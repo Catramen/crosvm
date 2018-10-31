@@ -46,12 +46,17 @@ impl Context {
 
     }
 
-    pub fn get_device(&self, bus: u8, addr: u8) -> Option<LibUsbDevice> {
+    pub fn get_device(&self, bus: u8, addr: u8, vid: u16, pid: u16) -> Option<LibUsbDevice> {
         for device in self.context.get_device_iter().unwrap() {
             if device.get_bus_number() == bus &&
                 device.get_address() == addr {
-                    debug!("device found bus {}, addr {}", bus, addr);
-                    return Some(device);
+                    if let Ok(descriptor) = device.get_device_descriptor() {
+                        if descriptor.idProduct == pid &&
+                            descriptor.idVendor == vid {
+                                debug!("device found bus {}, addr {}", bus, addr);
+                                return Some(device);
+                            }
+                    }
                 }
         }
         error!("device not found bus {}, addr {}", bus, addr);

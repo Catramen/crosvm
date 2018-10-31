@@ -2,17 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::os::raw::c_void;
 use std::mem::size_of;
+use std::os::raw::c_void;
 use std::sync::{Arc, Weak};
 
 use bindings::{
-    libusb_alloc_transfer, libusb_cancel_transfer, libusb_device_handle, libusb_free_transfer, libusb_submit_transfer,
-    libusb_transfer, libusb_transfer_status, LIBUSB_TRANSFER_CANCELLED, LIBUSB_TRANSFER_COMPLETED,
-    LIBUSB_TRANSFER_ERROR, LIBUSB_TRANSFER_NO_DEVICE, LIBUSB_TRANSFER_OVERFLOW,
-    LIBUSB_TRANSFER_STALL, LIBUSB_TRANSFER_TIMED_OUT, LIBUSB_TRANSFER_TYPE_BULK,
-    LIBUSB_TRANSFER_TYPE_INTERRUPT,
-    LIBUSB_TRANSFER_TYPE_CONTROL,
+    libusb_alloc_transfer, libusb_cancel_transfer, libusb_device_handle, libusb_free_transfer,
+    libusb_submit_transfer, libusb_transfer, libusb_transfer_status, LIBUSB_TRANSFER_CANCELLED,
+    LIBUSB_TRANSFER_COMPLETED, LIBUSB_TRANSFER_ERROR, LIBUSB_TRANSFER_NO_DEVICE,
+    LIBUSB_TRANSFER_OVERFLOW, LIBUSB_TRANSFER_STALL, LIBUSB_TRANSFER_TIMED_OUT,
+    LIBUSB_TRANSFER_TYPE_BULK, LIBUSB_TRANSFER_TYPE_CONTROL, LIBUSB_TRANSFER_TYPE_INTERRUPT,
 };
 use error::Error;
 use types::UsbRequestSetup;
@@ -152,7 +151,7 @@ pub struct TransferCanceller {
 impl TransferCanceller {
     /// Return false if fail to cancel.
     pub fn try_cancel(&self) -> bool {
-        match self.transfer.upgrade () {
+        match self.transfer.upgrade() {
             Some(t) => {
                 // Safe because self.transfer has ownership of the raw pointer.
                 let r = unsafe { libusb_cancel_transfer(t.transfer) };
@@ -161,7 +160,7 @@ impl TransferCanceller {
                 } else {
                     false
                 }
-            },
+            }
             None => false,
         }
     }
@@ -199,8 +198,11 @@ pub fn bulk_transfer(endpoint: u8, timeout: u32, size: usize) -> UsbTransfer<Bul
 }
 
 /// Build a data transfer.
-pub fn interrupt_transfer(endpoint: u8, timeout: u32, size: usize)
-    -> UsbTransfer<BulkTransferBuffer> {
+pub fn interrupt_transfer(
+    endpoint: u8,
+    timeout: u32,
+    size: usize,
+) -> UsbTransfer<BulkTransferBuffer> {
     UsbTransfer::<BulkTransferBuffer>::new(
         endpoint,
         LIBUSB_TRANSFER_TYPE_INTERRUPT as u8,
@@ -216,7 +218,7 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
         // Just panic on OOM.
         assert!(!transfer.is_null());
         let inner = Box::new(UsbTransferInner::<T> {
-            transfer: Arc::new(LibUsbTransfer {transfer}),
+            transfer: Arc::new(LibUsbTransfer { transfer }),
             callback: None,
             buffer,
         });
@@ -232,7 +234,7 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
     pub fn get_canceller(&self) -> TransferCanceller {
         let weak_transfer = Arc::downgrade(&self.inner.transfer);
         TransferCanceller {
-            transfer: weak_transfer
+            transfer: weak_transfer,
         }
     }
 

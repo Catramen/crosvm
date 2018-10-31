@@ -72,7 +72,7 @@ impl MsgOnSocket for MaybeOwnedFd {
 
 #[derive(MsgOnSocket, Debug)]
 pub enum UsbControlCommand {
-    AttachDevice{bus: u8, addr: u8},
+    AttachDevice{bus: u8, addr: u8, vid: u16, pid: u16, fd: RawFd },
     DetachDevice{port: u8},
     ListDevice{port: u8},
 }
