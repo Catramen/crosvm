@@ -685,7 +685,7 @@ fn usb_attach(mut args: std::env::Args) -> std::result::Result<(), ()> {
                 return Err(());
             },
         };
-        match UnixDatagram::unbound().and_then(|s| {
+        match UnixDatagram::bind("s0.sock").and_then(|s| {
             s.connect(&socket_path)?;
             Ok(s)
         }) {

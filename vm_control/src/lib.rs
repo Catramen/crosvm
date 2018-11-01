@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Handles IPC for controlling the main VM process.
-//!
 //! The VM Control IPC protocol is synchronous, meaning that each `VmRequest` sent over a connection
 //! will receive a `VmResponse` for that request next time data is received over that connection.
 //!
@@ -82,8 +80,9 @@ pub enum UsbControlResult {
     Ok{port: u8},
     NoAvailablePort,
     NoSuchDevice,
+    NoSuchPort,
     FailToOpenDevice,
-    Device{vid: u16, pid: u16},
+    Device{port: u8, vid: u16, pid: u16},
 }
 
 pub type UsbControlSocket = MsgSocket<UsbControlCommand, UsbControlResult>;

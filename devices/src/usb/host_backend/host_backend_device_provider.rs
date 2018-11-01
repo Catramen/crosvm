@@ -139,7 +139,7 @@ impl EventHandler for ProviderInner {
                             }
                         }
                     },
-                    _ => UsbControlResult::NoSuchDevice,
+                    _ => UsbControlResult::NoSuchPort,
                 };
                 self.sock.send(&result).unwrap();
             },
