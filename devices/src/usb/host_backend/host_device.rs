@@ -75,10 +75,10 @@ pub struct HostDevice {
     device: LibUsbDevice,
     device_handle: Arc<Mutex<DeviceHandle>>,
     ctl_ep_state: ControlEndpointState,
-    control_transfer: Arc<Mutex<Option<UsbTransfer<ControlTransferBuffer>>>>,
     alt_settings: HashMap<u16, u16>,
     claimed_interfaces: Vec<i32>,
     host_claimed_interfaces: Vec<i32>,
+    control_request_setup: UsbRequestSetup,
 }
 
 impl Drop for HostDevice {
@@ -95,10 +95,10 @@ impl HostDevice {
             device,
             device_handle: Arc::new(Mutex::new(device_handle)),
             ctl_ep_state: ControlEndpointState::StatusStage,
-            control_transfer: Arc::new(Mutex::new(Some(control_transfer(0)))),
             alt_settings: HashMap::new(),
             claimed_interfaces: vec![],
             host_claimed_interfaces: vec![],
+            UsbRequestSetup::new(0, 0, 0, 0, 0),
         };
         device.detach_host_drivers();
         device
@@ -159,11 +159,6 @@ impl HostDevice {
     }
 
     fn handle_control_transfer(&mut self, transfer: XhciTransfer) {
-        if self.control_transfer.lock().unwrap().is_none() {
-            // Yes, we can cache and handle transfers later. But it's easier to not submit transfer
-            // before last transfer is handled.
-            panic!("Last control transfer has not yet finished.");
-        }
         let xhci_transfer = Arc::new(transfer);
         match xhci_transfer.get_transfer_type() {
             XhciTransferType::SetupStage(setup) => {
@@ -172,9 +167,7 @@ impl HostDevice {
                     return;
                 }
                 debug!("setup stage setup buffer {:?}", setup);
-                let mut locked = self.control_transfer.lock().unwrap();
-                // Copy request setup into control transfer buffer.
-                locked.as_mut().unwrap().mut_buffer().set_request_setup(&setup);
+                self.control_request_setup = setup;
 
                 // If the control transfer is device to host, we can go ahead submit the
                 // transfer right now.
@@ -182,8 +175,8 @@ impl HostDevice {
                     ControlRequestDataPhaseTransferDirection::DeviceToHost {
                         // Control transfer works like yoyo. It submited to device and will be put
                         // back when callback is done.
-                        let mut control_transfer = locked.take().unwrap();
-                        let weak_control_transfer = Arc::downgrade(&self.control_transfer);
+                        let mut control_transfer = control_transfer(0);
+                        control_transfer.mut_buffer().set_request_setup(&self.control_request_setup);
                         let tmp_transfer = xhci_transfer.clone();
                         control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
                             debug!("setup token control transfer callback invoked");
@@ -197,9 +190,6 @@ impl HostDevice {
                                 XhciTransferState::Completed => {
                                     let status = t.status();
                                     let actual_length = t.actual_length();
-                                    if let Some(control_transfer) = weak_control_transfer.upgrade() {
-                                        (*control_transfer.lock().unwrap()) = Some(t);
-                                    }
                                     drop(state);
                                     xhci_transfer.on_transfer_complete(status, actual_length as u32);
                                 },
@@ -208,10 +198,7 @@ impl HostDevice {
                                 }
                             }
                         });
-                        if let Some(t) = submit_transfer(&tmp_transfer, &self.device_handle, control_transfer) {
-                            // Put the transfer back.
-                            *locked = Some(t);
-                        };
+                        submit_transfer(&tmp_transfer, &self.device_handle, control_transfer);
                 } else {
                     xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
                 }
@@ -222,11 +209,7 @@ impl HostDevice {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                  }
-                 let mut locked = self.control_transfer.lock().unwrap();
-                 let control_transfer = locked.as_mut().unwrap();
-                 let tbuffer = control_transfer.mut_buffer();
-                 let request_setup = &tbuffer.setup_buffer;
-                 match request_setup.get_direction() {
+                 match self.control_request_setup.get_direction() {
                          Some(ControlRequestDataPhaseTransferDirection::HostToDevice) => {
                              // Read from dma to host buffer.
                              let bytes = buffer.read(&mut tbuffer.data_buffer) as u32;
@@ -250,19 +233,14 @@ impl HostDevice {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                 }
-                let request_setup = {
-                    let mut locked = self.control_transfer.lock().unwrap();
-                    let control_transfer = locked.as_mut().unwrap();
-                    let mut tbuffer = control_transfer.buffer();
-                    tbuffer.setup_buffer.clone()
-                };
-                match request_setup.get_direction() {
+
+                match self.control_request_setup.get_direction() {
                     Some(ControlRequestDataPhaseTransferDirection::HostToDevice) => {
                         match HostToDeviceControlRequest::analyze_request_setup(&request_setup) {
                             HostToDeviceControlRequest::Other => {
-                                let mut locked = self.control_transfer.lock().unwrap();
-                                let mut control_transfer = locked.take().unwrap();
-                                let myct = self.control_transfer.clone();
+                                let mut control_transfer = control_transfer(0);
+                                control_transfer.mut_buffer().set_request_setup(&self.control_request_setup);
+
                                 let tmp_transfer = xhci_transfer.clone();
                                 control_transfer.set_callback(
                                     move |t: UsbTransfer<ControlTransferBuffer>| {
@@ -277,7 +255,6 @@ impl HostDevice {
                                                 let status = t.status();
                                                 // Use actual length soon.
                                                 let _actual_length = t.actual_length();
-                                                (*myct.lock().unwrap()) = Some(t);
                                                 drop(state);
                                                 xhci_transfer.on_transfer_complete(status, 0);
                                             },
@@ -286,10 +263,7 @@ impl HostDevice {
                                             }
                                         }
                                     });
-                                if let Some(t) = submit_transfer(&tmp_transfer, &self.device_handle, control_transfer) {
-                                    // Put the transfer back.
-                                    *locked = Some(t);
-                                };
+                                submit_transfer(&tmp_transfer, &self.device_handle, control_transfer);
                             },
                             HostToDeviceControlRequest::SetAddress => {
                                 debug!("host device handling set address");

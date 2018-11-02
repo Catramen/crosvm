@@ -37,8 +37,8 @@ pub fn update_state<T: UsbTransferBuffer>(xhci_transfer: &Arc<XhciTransfer>,
 /// Helper function to submit usb_transfer to device handle. If failed, we are giving the transfer
 /// back.
 pub fn submit_transfer<T: UsbTransferBuffer>(xhci_transfer: &Arc<XhciTransfer>,
-                                                  device_handle: &Arc<Mutex<DeviceHandle>>,
-                                                  usb_transfer: UsbTransfer<T>) -> Option<UsbTransfer<T>> {
+                                             device_handle: &Arc<Mutex<DeviceHandle>>,
+                                             usb_transfer: UsbTransfer<T>) -> bool {
     // We need to hold the lock to avoid race condition.
     let mut state = xhci_transfer.state().lock().unwrap();
     let mut tmp = XhciTransferState::Cancelled;
@@ -54,22 +54,22 @@ pub fn submit_transfer<T: UsbTransferBuffer>(xhci_transfer: &Arc<XhciTransfer>,
             });
             *state = XhciTransferState::Submitted(cancel_cb);
             match device_handle.lock().unwrap().submit_async_transfer(usb_transfer) {
-                Err((e, t)) => {
+                Err(e) => {
                     error!("fail to submit transfer {:?}", e);
                     *state = XhciTransferState::Completed;
                     drop(state);
                     xhci_transfer.on_transfer_complete(TransferStatus::Error, 0);
-                    return Some(t);
+                    return true
                 },
                 // If it's submitted, we don't need to send on_transfer_complete now.
-                _ => return None,
+                _ => return false
             }
         },
         XhciTransferState::Cancelled => {
             warn!("Transfer is already cancelled");
             drop(state);
             xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
-            return Some(usb_transfer);
+            return true
         }
         _ => {
             panic!("there is a bug");
