@@ -137,7 +137,7 @@ impl DeviceHandle {
     pub fn submit_async_transfer<T: UsbTransferBuffer>(
         &self,
         transfer: UsbTransfer<T>,
-    ) -> std::result::Result<(), (Error, UsbTransfer<T>)> {
+    ) -> std::result::Result<(), Error> {
         unsafe { transfer.submit(self.handle) }
     }
 }

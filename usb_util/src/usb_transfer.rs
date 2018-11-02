@@ -274,12 +274,15 @@ impl<T: UsbTransferBuffer> UsbTransfer<T> {
     pub unsafe fn submit(
         self,
         handle: *mut libusb_device_handle,
-    ) -> Result<(), (Error, UsbTransfer<T>)> {
+    ) -> Result<(), Error> {
         let transfer = self.into_raw();
         (*transfer).dev_handle = handle;
         match Error::from(libusb_submit_transfer(transfer)) {
             Error::Success(_e) => Ok(()),
-            err => Err((err, UsbTransfer::<T>::from_raw(transfer))),
+            err => {
+                UsbTransfer::<T>::from_raw(transfer);
+                Err(err)
+            }
         }
     }
 
