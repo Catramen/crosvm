@@ -685,7 +685,7 @@ fn usb_attach(mut args: std::env::Args) -> std::result::Result<(), ()> {
                 return Err(());
             },
         };
-        match UnixDatagram::bind("s0.sock").and_then(|s| {
+        match UnixDatagram::unbound().and_then(|s| {
             s.connect(&socket_path)?;
             Ok(s)
         }) {
@@ -798,7 +798,7 @@ fn usb_list(mut args: std::env::Args) -> std::result::Result<(), ()> {
                     continue;
                 };
                 match sock.recv() {
-                    Ok(VmResponse::UsbResponse(UsbControlResult::Device{vid, pid})) => {
+                    Ok(VmResponse::UsbResponse(UsbControlResult::Device{port, vid, pid})) => {
                         info!("usb devices {}:{} is connected to guest port {}", vid, pid, port);
                     },
                     Ok(VmResponse::UsbResponse(UsbControlResult::NoSuchDevice)) => {

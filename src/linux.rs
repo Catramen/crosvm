@@ -1080,7 +1080,9 @@ fn run_control(
                                                     &balloon_host_socket,
                                                     &usb_control_socket);
                                 debug!("Response: {:?}", response);
-                                socket.as_ref().connect("s0.sock").unwrap();
+                                if let Err(_) = socket.as_ref().connect("s0.sock") {
+                                    error!("fail to connect to repsonse sock");
+                                }
                                 if let Err(e) = socket.send(&response) {
                                     error!("failed to send VmResponse: {:?}", e);
                                 }
