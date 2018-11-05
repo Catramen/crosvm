@@ -15,14 +15,15 @@ use usb_util::error::Error as LibUsbError;
 use std::collections::HashMap;
 use super::usb_endpoint::UsbEndpoint;
 use super::utils::{update_state, submit_transfer};
+use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
 
 #[derive(PartialEq)]
 pub enum ControlEndpointState {
-    /// Control endpoint has received setup stage.
+    /// Control endpoint should receive setup stage next.
     SetupStage,
-    /// Control endpoint has received data stage.
+    /// Control endpoint should receive data stage next.
     DataStage,
-    /// Control endpoint has received status stage.
+    /// Control endpoint should receive status stage next.
     StatusStage,
 }
 
@@ -79,6 +80,7 @@ pub struct HostDevice {
     claimed_interfaces: Vec<i32>,
     host_claimed_interfaces: Vec<i32>,
     control_request_setup: UsbRequestSetup,
+    buffer: Option<ScatterGatherBuffer>,
 }
 
 impl Drop for HostDevice {
@@ -94,11 +96,12 @@ impl HostDevice {
             endpoints: vec![],
             device,
             device_handle: Arc::new(Mutex::new(device_handle)),
-            ctl_ep_state: ControlEndpointState::StatusStage,
+            ctl_ep_state: ControlEndpointState::SetupStage,
             alt_settings: HashMap::new(),
             claimed_interfaces: vec![],
             host_claimed_interfaces: vec![],
-            UsbRequestSetup::new(0, 0, 0, 0, 0),
+            control_request_setup: UsbRequestSetup::new(0, 0, 0, 0, 0),
+            buffer: None,
         };
         device.detach_host_drivers();
         device
@@ -162,85 +165,40 @@ impl HostDevice {
         let xhci_transfer = Arc::new(transfer);
         match xhci_transfer.get_transfer_type() {
             XhciTransferType::SetupStage(setup) => {
-                if self.ctl_ep_state != ControlEndpointState::StatusStage {
+                if self.ctl_ep_state != ControlEndpointState::SetupStage {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                 }
                 debug!("setup stage setup buffer {:?}", setup);
                 self.control_request_setup = setup;
-
-                // If the control transfer is device to host, we can go ahead submit the
-                // transfer right now.
-                if setup.get_direction().unwrap() ==
-                    ControlRequestDataPhaseTransferDirection::DeviceToHost {
-                        // Control transfer works like yoyo. It submited to device and will be put
-                        // back when callback is done.
-                        let mut control_transfer = control_transfer(0);
-                        control_transfer.mut_buffer().set_request_setup(&self.control_request_setup);
-                        let tmp_transfer = xhci_transfer.clone();
-                        control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
-                            debug!("setup token control transfer callback invoked");
-                            update_state(&xhci_transfer, &t);
-                            let state = xhci_transfer.state().lock().unwrap();
-                            match *state {
-                                XhciTransferState::Cancelled => {
-                                    drop(state);
-                                    xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
-                                },
-                                XhciTransferState::Completed => {
-                                    let status = t.status();
-                                    let actual_length = t.actual_length();
-                                    drop(state);
-                                    xhci_transfer.on_transfer_complete(status, actual_length as u32);
-                                },
-                                _ => {
-                                    panic!("should not take this branch");
-                                }
-                            }
-                        });
-                        submit_transfer(&tmp_transfer, &self.device_handle, control_transfer);
-                } else {
-                    xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
-                }
-                self.ctl_ep_state = ControlEndpointState::SetupStage;
+                xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                self.ctl_ep_state = ControlEndpointState::DataStage;
             },
             XhciTransferType::DataStage(buffer) => {
-                 if self.ctl_ep_state != ControlEndpointState::SetupStage {
+                 if self.ctl_ep_state != ControlEndpointState::DataStage {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                  }
-                 match self.control_request_setup.get_direction() {
-                         Some(ControlRequestDataPhaseTransferDirection::HostToDevice) => {
-                             // Read from dma to host buffer.
-                             let bytes = buffer.read(&mut tbuffer.data_buffer) as u32;
-                             xhci_transfer.on_transfer_complete(TransferStatus::Completed, bytes);
-                         },
-                         Some(ControlRequestDataPhaseTransferDirection::DeviceToHost) => {
-                             // For device to host transfer, it's already handled in setup stage.
-                             // As ScatterGatherBuffer implementation handles buffer size, we can
-                             // copy all buffer.
-                             let bytes = buffer.write(&tbuffer.data_buffer) as u32;
-                             xhci_transfer.on_transfer_complete(TransferStatus::Completed, bytes);
-                         },
-                         _ => error!("Unknown transfer direction!"),
-                 }
-
-                 self.ctl_ep_state = ControlEndpointState::DataStage;
+                 self.buffer = Some(buffer);
+                 xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                 self.ctl_ep_state = ControlEndpointState::StatusStage;
 
             },
             XhciTransferType::StatusStage => {
-                if self.ctl_ep_state == ControlEndpointState::StatusStage {
+                if self.ctl_ep_state == ControlEndpointState::SetupStage {
                     error!("Control endpoing is in an inconsistant state");
                     return;
                 }
-
+                let buffer = self.buffer.take();
                 match self.control_request_setup.get_direction() {
                     Some(ControlRequestDataPhaseTransferDirection::HostToDevice) => {
-                        match HostToDeviceControlRequest::analyze_request_setup(&request_setup) {
+                        match HostToDeviceControlRequest::analyze_request_setup(&self.control_request_setup) {
                             HostToDeviceControlRequest::Other => {
                                 let mut control_transfer = control_transfer(0);
                                 control_transfer.mut_buffer().set_request_setup(&self.control_request_setup);
-
+                                if let Some(buffer) = buffer {
+                                    buffer.read(&mut control_transfer.mut_buffer().data_buffer);
+                                }
                                 let tmp_transfer = xhci_transfer.clone();
                                 control_transfer.set_callback(
                                     move |t: UsbTransfer<ControlTransferBuffer>| {
@@ -267,33 +225,62 @@ impl HostDevice {
                             },
                             HostToDeviceControlRequest::SetAddress => {
                                 debug!("host device handling set address");
-                                self.set_address(request_setup.value as u32);
+                                let addr = self.control_request_setup.value as u32;
+                                self.set_address(addr);
                                 xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
                             },
                             HostToDeviceControlRequest::SetConfig => {
                                 debug!("host device handling set config");
-                                let status = self.set_config(&request_setup);
+                                let status = self.set_config();
                                 xhci_transfer.on_transfer_complete(status, 0);
                             },
                             HostToDeviceControlRequest::SetInterface => {
                                 debug!("host device handling set interface");
-                                let status = self.set_interface(&request_setup);
+                                let status = self.set_interface();
                                 xhci_transfer.on_transfer_complete(status, 0);
                             },
                             HostToDeviceControlRequest::ClearFeature => {
                                 debug!("host device handling clear feature");
-                                let status = self.clear_feature(&request_setup);
+                                let status = self.clear_feature();
                                 xhci_transfer.on_transfer_complete(status, 0);
                             }
                         };
                     },
                     Some(ControlRequestDataPhaseTransferDirection::DeviceToHost) => {
-                        xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                        let mut control_transfer = control_transfer(0);
+                        control_transfer.mut_buffer().set_request_setup(&self.control_request_setup);
+                        let tmp_transfer = xhci_transfer.clone();
+                        control_transfer.set_callback(move |t: UsbTransfer<ControlTransferBuffer>| {
+                            debug!("setup token control transfer callback invoked");
+                            update_state(&xhci_transfer, &t);
+                            let state = xhci_transfer.state().lock().unwrap();
+                            match *state {
+                                XhciTransferState::Cancelled => {
+                                    debug!("transfer cancelled");
+                                    drop(state);
+                                    xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
+                                },
+                                XhciTransferState::Completed => {
+                                    let status = t.status();
+                                    let actual_length = t.actual_length();
+                                    if let Some(ref buffer) = buffer {
+                                        let bytes = buffer.write(&t.buffer().data_buffer) as u32;
+                                        debug!("transfer completed bytes: {} actual length {}", bytes, actual_length);
+                                    }
+                                    drop(state);
+                                    xhci_transfer.on_transfer_complete(status, 0);
+                                },
+                                _ => {
+                                    panic!("should not take this branch");
+                                }
+                            }
+                        });
+                        submit_transfer(&tmp_transfer, &self.device_handle, control_transfer);
                     },
                     _ => error!("Unknown transfer direction!"),
                 }
 
-                self.ctl_ep_state = ControlEndpointState::StatusStage;
+                self.ctl_ep_state = ControlEndpointState::SetupStage;
             },
             _ => {
                 panic!("Non control transfer sent to control endpoint");
@@ -301,9 +288,9 @@ impl HostDevice {
         }
     }
 
-    fn set_config(&mut self, request_setup: &UsbRequestSetup) -> TransferStatus {
+    fn set_config(&mut self) -> TransferStatus {
         // It's a standard, set_config, device request.
-        let config = (request_setup.value & 0xff) as i32;
+        let config = (self.control_request_setup.value & 0xff) as i32;
         debug!("Set config control transfer is received with config: {}", config);
         self.release_interfaces();
         let cur_config = self.device_handle.lock().unwrap().get_active_configuration().unwrap();
@@ -316,10 +303,11 @@ impl HostDevice {
         TransferStatus::Completed
     }
 
-    fn set_interface(&mut self, request_setup: &UsbRequestSetup) -> TransferStatus {
+    fn set_interface(&mut self) -> TransferStatus {
+        debug!("set interface");
         // It's a standard, set_interface, interface request.
-        let interface = request_setup.index;
-        let alt_setting = request_setup.value;
+        let interface = self.control_request_setup.index;
+        let alt_setting = self.control_request_setup.value;
         self.device_handle.lock().unwrap()
             .set_interface_alt_setting(interface as i32, alt_setting as i32).unwrap();
         self.alt_settings.insert(interface, alt_setting);
@@ -327,7 +315,9 @@ impl HostDevice {
         TransferStatus::Completed
     }
 
-    fn clear_feature(&mut self, request_setup: &UsbRequestSetup) -> TransferStatus {
+    fn clear_feature(&mut self) -> TransferStatus {
+        debug!("clear feature");
+        let request_setup = &self.control_request_setup;
         // It's a standard, clear_feature, endpoint request.
         const STD_FEATURE_ENDPOINT_HALT: u16 = 0;
         if request_setup.value == STD_FEATURE_ENDPOINT_HALT {
@@ -351,6 +341,7 @@ impl HostDevice {
     }
 
     fn create_endpoints(&mut self) {
+        debug!("creat endpoints");
         self.endpoints = Vec::new();
         let config_descriptor = match self.device.get_active_config_descriptor() {
             Err(e) => {

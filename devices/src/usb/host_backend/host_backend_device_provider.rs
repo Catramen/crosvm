@@ -96,7 +96,13 @@ impl EventHandler for ProviderInner {
         let cmd = self.sock.recv().unwrap();
         match cmd {
             UsbControlCommand::AttachDevice{ bus, addr, vid, pid, fd } => {
-                let device = self.ctx.get_device(bus, addr, vid, pid).unwrap();
+                let device = match self.ctx.get_device(bus, addr, vid, pid) {
+                    Some(d) => d,
+                    None => {
+                        self.sock.send(&UsbControlResult::NoSuchDevice).unwrap();
+                        return;
+                    }
+                };
                 let device_handle = match device.open_fd(fd) {
                     Ok(handle) => handle,
                     Err(e) => {
@@ -126,13 +132,14 @@ impl EventHandler for ProviderInner {
                 }
             },
             UsbControlCommand::ListDevice{ port } => {
-                let result = match self.usb_hub.get_port(port) {
+                let port_number = port;
+                let result = match self.usb_hub.get_port(port_number) {
                     Some(port) => {
                         match *port.get_backend_device() {
                             Some(ref device) => {
                                 let vid = device.get_vid();
                                 let pid = device.get_pid();
-                                UsbControlResult::Device{vid, pid}
+                                UsbControlResult::Device{port: port_number, vid, pid}
                             }
                             None => {
                                 UsbControlResult::NoSuchDevice
