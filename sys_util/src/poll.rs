@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::cell::{Cell, Ref, RefCell};
 use std::cmp::min;
 use std::fs::File;
 use std::i32;
@@ -11,6 +10,8 @@ use std::marker::PhantomData;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 use std::ptr::null_mut;
 use std::slice;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
@@ -151,7 +152,7 @@ where
 /// The list of event returned by `PollContext::wait`.
 pub struct PollEvents<'a, T> {
     count: usize,
-    events: Ref<'a, [epoll_event; POLL_CONTEXT_MAX_EVENTS]>,
+    events: MutexGuard<'a, [epoll_event; POLL_CONTEXT_MAX_EVENTS]>,
     tokens: PhantomData<[T]>, // Needed to satisfy usage of T
 }
 
@@ -161,7 +162,7 @@ impl<'a, T: PollToken> PollEvents<'a, T> {
     pub fn to_owned(&self) -> PollEventsOwned<T> {
         PollEventsOwned {
             count: self.count,
-            events: RefCell::new(*self.events),
+            events: Mutex::new(*self.events),
             tokens: PhantomData,
         }
     }
@@ -197,7 +198,7 @@ impl<'a, T: PollToken> PollEvents<'a, T> {
 /// A deep copy of the event records from `PollEvents`.
 pub struct PollEventsOwned<T> {
     count: usize,
-    events: RefCell<[epoll_event; POLL_CONTEXT_MAX_EVENTS]>,
+    events: Mutex<[epoll_event; POLL_CONTEXT_MAX_EVENTS]>,
     tokens: PhantomData<T>, // Needed to satisfy usage of T
 }
 
@@ -206,7 +207,7 @@ impl<T: PollToken> PollEventsOwned<T> {
     pub fn as_ref(&self) -> PollEvents<T> {
         PollEvents {
             count: self.count,
-            events: self.events.borrow(),
+            events: self.events.lock().unwrap(),
             tokens: PhantomData,
         }
     }
@@ -276,11 +277,11 @@ pub struct PollContext<T> {
     // even though that reference is immutable. This is terribly inconvenient for the caller because
     // the borrow checking would prevent them from using `delete` and `add` while the events are in
     // scope.
-    events: RefCell<[epoll_event; POLL_CONTEXT_MAX_EVENTS]>,
+    events: Mutex<[epoll_event; POLL_CONTEXT_MAX_EVENTS]>,
 
     // Hangup busy loop detection variables. See `check_for_hungup_busy_loop`.
-    hangups: Cell<usize>,
-    max_hangups: Cell<usize>,
+    hangups: AtomicUsize,
+    max_hangups: AtomicUsize,
 
     // Needed to satisfy usage of T
     tokens: PhantomData<[T]>,
@@ -296,9 +297,9 @@ impl<T: PollToken> PollContext<T> {
         }
         Ok(PollContext {
             epoll_ctx: unsafe { File::from_raw_fd(epoll_fd) },
-            events: RefCell::new([epoll_event { events: 0, u64: 0 }; POLL_CONTEXT_MAX_EVENTS]),
-            hangups: Cell::new(0),
-            max_hangups: Cell::new(0),
+            events: Mutex::new([epoll_event { events: 0, u64: 0 }; POLL_CONTEXT_MAX_EVENTS]),
+            hangups: AtomicUsize::new(0),
+            max_hangups: AtomicUsize::new(0),
             // Safe because the `epoll_fd` is valid and we hold unique ownership.
             tokens: PhantomData,
         })
@@ -340,8 +341,8 @@ impl<T: PollToken> PollContext<T> {
         };
 
         // Used to detect busy loop waits caused by unhandled hangup events.
-        self.hangups.set(0);
-        self.max_hangups.set(self.max_hangups.get() + 1);
+        self.hangups.store(0, Ordering::SeqCst);
+        self.max_hangups.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -390,8 +391,8 @@ impl<T: PollToken> PollContext<T> {
         };
 
         // Used to detect busy loop waits caused by unhandled hangup events.
-        self.hangups.set(0);
-        self.max_hangups.set(self.max_hangups.get() - 1);
+        self.hangups.store(0, Ordering::SeqCst);
+        self.max_hangups.fetch_sub(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -420,8 +421,8 @@ impl<T: PollToken> PollContext<T> {
     // advantage of always triggering eventually genuine busy loop cases, requires no dynamic
     // allocations, is fast and constant time to compute, and has no false positives.
     fn check_for_hungup_busy_loop(&self, new_hangups: usize) {
-        let old_hangups = self.hangups.get();
-        let max_hangups = self.max_hangups.get();
+        let old_hangups = self.hangups.load(Ordering::SeqCst);
+        let max_hangups = self.max_hangups.load(Ordering::SeqCst);
         if old_hangups <= max_hangups && old_hangups + new_hangups > max_hangups {
             warn!(
                 "busy poll wait loop with hungup FDs detected on thread {}",
@@ -431,7 +432,7 @@ impl<T: PollToken> PollContext<T> {
             #[cfg(test)]
             panic!("hungup busy loop detected");
         }
-        self.hangups.set(old_hangups + new_hangups);
+        self.hangups.fetch_add(new_hangups, Ordering::SeqCst);
     }
 
     /// Waits for any events to occur in FDs that were previously added to this context.
@@ -468,7 +469,7 @@ impl<T: PollToken> PollContext<T> {
             min(i32::max_value() as u64, millis) as i32
         };
         let ret = {
-            let mut epoll_events = self.events.borrow_mut();
+            let mut epoll_events = self.events.lock().unwrap();
             let max_events = epoll_events.len() as c_int;
             // Safe because we give an epoll context and a properly sized epoll_events array
             // pointer, which we trust the kernel to fill in properly.
@@ -484,7 +485,7 @@ impl<T: PollToken> PollContext<T> {
         if ret < 0 {
             return errno_result();
         }
-        let epoll_events = self.events.borrow();
+        let epoll_events = self.events.lock().unwrap();
         let events = PollEvents {
             count: ret as usize,
             events: epoll_events,
