@@ -38,7 +38,7 @@ fn valid_endpoint_id(endpoint_id: u8) -> bool {
 #[derive(Clone)]
 pub struct DeviceSlots {
     hub: Arc<UsbHub>,
-    slots: Vec<Arc<Mutex<DeviceSlot>>>,
+    slots: Vec<Arc<DeviceSlot>>,
 }
 
 impl DeviceSlots {
@@ -52,20 +52,20 @@ impl DeviceSlots {
         let mut vec = Vec::new();
         for i in 0..MAX_SLOTS {
             let slot_id = i + 1;
-            vec.push(Arc::new(Mutex::new(DeviceSlot::new(
+            vec.push(Arc::new(DeviceSlot::new(
                 slot_id as u8,
                 dcbaap.clone(),
                 hub.clone(),
                 interrupter.clone(),
                 event_loop.clone(),
                 mem.clone(),
-            ))));
+            )));
         }
         DeviceSlots { hub, slots: vec }
     }
 
     /// Note that slot id starts from 0. Slot index start from 1.
-    pub fn slot(&self, slot_id: u8) -> Option<MutexGuard<DeviceSlot>> {
+    pub fn slot(&self, slot_id: u8) -> Option<Arc<DeviceSlot>> {
         if !valid_slot_id(slot_id) {
             error!(
                 "trying to index a wrong slot id {}, max slot = {}",
@@ -73,7 +73,7 @@ impl DeviceSlots {
             );
             None
         } else {
-            Some(self.slots[slot_id as usize - 1].lock().unwrap())
+            Some(self.slots[slot_id as usize - 1].clone())
         }
     }
 
@@ -84,7 +84,7 @@ impl DeviceSlots {
         let auto_callback = AutoCallback::new(move || {
             debug!("executing stop device slot callback");
             for slot in &slots {
-                slot.lock().unwrap().reset();
+                slot.reset();
                 hub.reset();
             }
             callback();
@@ -94,7 +94,7 @@ impl DeviceSlots {
 
     pub fn stop_all(&self, auto_callback: AutoCallback) {
         for slot in &self.slots {
-            slot.lock().unwrap().stop_all_trc(auto_callback.clone());
+            slot.stop_all_trc(auto_callback.clone());
         }
     }
 
@@ -111,14 +111,14 @@ impl DeviceSlots {
 
 pub struct DeviceSlot {
     slot_id: u8,
-    port_id: u8, // Valid port id starts from 1, to MAX_PORTS.
+    port_id: Mutex<u8>, // Valid port id starts from 1, to MAX_PORTS.
     dcbaap: Register<u64>,
     hub: Arc<UsbHub>,
     interrupter: Arc<Mutex<Interrupter>>,
-    event_loop: EventLoop,
+    event_loop: Mutex<EventLoop>,
     mem: GuestMemory,
-    enabled: bool,
-    transfer_ring_controllers: Vec<Option<Arc<TransferRingController>>>,
+    enabled: Mutex<bool>,
+    transfer_ring_controllers: Mutex<Vec<Option<Arc<TransferRingController>>>>,
 }
 
 impl DeviceSlot {
@@ -136,15 +136,30 @@ impl DeviceSlot {
         }
         DeviceSlot {
             slot_id,
-            port_id: 0,
+            port_id: Mutex::new(0),
             dcbaap,
             hub,
             interrupter,
-            event_loop,
+            event_loop: Mutex::new(event_loop),
             mem,
-            enabled: false,
-            transfer_ring_controllers,
+            enabled: Mutex::new(false),
+            transfer_ring_controllers: Mutex::new(transfer_ring_controllers),
         }
+    }
+
+
+    fn get_trc(&self, i: usize) -> Option<Arc<TransferRingController>> {
+        let trcs = self.transfer_ring_controllers.lock().unwrap();
+        trcs[i].clone()
+    }
+
+    fn set_trc(&self, i: usize, trc: Option<Arc<TransferRingController>>) {
+        let mut trcs = self.transfer_ring_controllers.lock().unwrap();
+        trcs[i] = trc;
+    }
+
+    fn trc_len(&self) -> usize {
+        self.transfer_ring_controllers.lock().unwrap().len()
     }
 
     /// The arguemtns are identical to the fields in each doorbell register. The
@@ -173,7 +188,7 @@ impl DeviceSlot {
         );
         // See DCI in spec.
         let endpoint_index = target - 1;
-        let transfer_ring_controller = match self.transfer_ring_controllers[endpoint_index].as_ref()
+        let transfer_ring_controller = match self.get_trc(endpoint_index)
         {
             Some(tr) => tr,
             None => {
@@ -194,27 +209,26 @@ impl DeviceSlot {
     }
 
     /// Enable the slot, return if true it's successful.
-    pub fn enable(&mut self) -> bool {
-        if self.enabled {
+    pub fn enable(&self) -> bool {
+        let mut enabled = self.enabled.lock().unwrap();
+        if *enabled {
             error!("device slot is already enabled");
             return false;
         }
         debug!("device slot {} enabled", self.slot_id);
-        self.enabled = true;
+        *enabled = true;
         return true;
     }
 
     pub fn disable<C: Fn(TrbCompletionCode) + 'static + Send>(
-        slot: &Arc<Mutex<DeviceSlot>>,
+        slot: &Arc<DeviceSlot>,
         callback: C,
     ) {
-        let s = slot.lock().unwrap();
-        debug!("device slot {} is being disabled", s.slot_id);
-        if s.enabled {
+        debug!("device slot {} is being disabled", slot.slot_id);
+        if *slot.enabled.lock().unwrap() {
             let slot_weak = Arc::downgrade(slot);
             let auto_callback = AutoCallback::new(move || {
-                let slot_arc = slot_weak.upgrade().unwrap();
-                let mut slot = slot_arc.lock().unwrap();
+                let slot = slot_weak.upgrade().unwrap();
                 let mut device_context = slot.get_device_context();
                 device_context
                     .slot_context
@@ -227,15 +241,15 @@ impl DeviceSlot {
                 );
                 callback(TrbCompletionCode::Success);
             });
-            s.stop_all_trc(auto_callback);
+            slot.stop_all_trc(auto_callback);
         } else {
             callback(TrbCompletionCode::SlotNotEnabledError);
         }
     }
 
     // Assigns the device address and initializes slot and endpoint 0 context.
-    pub fn set_address(&mut self, trb: &AddressDeviceCommandTrb) -> TrbCompletionCode {
-        if !self.enabled {
+    pub fn set_address(&self, trb: &AddressDeviceCommandTrb) -> TrbCompletionCode {
+        if !*self.enabled.lock().unwrap() {
             error!(
                 "trying to set address to a disabled device slot {}",
                 self.slot_id
@@ -261,21 +275,21 @@ impl DeviceSlot {
 
         // Read back device context.
         let mut device_context = self.get_device_context();
-        self.port_id = device_context.slot_context.get_root_hub_port_number();
+        *self.port_id.lock().unwrap() = device_context.slot_context.get_root_hub_port_number();
         debug!(
             "port id {} is assigned to slot id {}",
-            self.port_id, self.slot_id
+            *self.port_id.lock().unwrap(), self.slot_id
         );
 
         // Initialize the control endpoint. Endpoint id = 1.
-        self.transfer_ring_controllers[0] = Some(TransferRingController::new(
+        self.set_trc(0, Some(TransferRingController::new(
             self.mem.clone(),
-            self.hub.get_port(self.port_id).unwrap(),
-            self.event_loop.clone(),
+            self.hub.get_port(*self.port_id.lock().unwrap()).unwrap(),
+            self.event_loop.lock().unwrap().clone(),
             self.interrupter.clone(),
             self.slot_id,
             1,
-        ));
+        )));
 
         // Assign slot ID as device address if block_set_address_request is not set.
         if trb.get_block_set_address_request() > 0 {
@@ -283,7 +297,7 @@ impl DeviceSlot {
                 .slot_context
                 .set_state(DeviceSlotState::Default);
         } else {
-            let port = self.hub.get_port(self.port_id).unwrap();
+            let port = self.hub.get_port(*self.port_id.lock().unwrap()).unwrap();
             let mut backend = port.get_backend_device();
             if backend.is_some() {
                 backend.as_mut().unwrap().set_address(self.slot_id as u32);
@@ -298,16 +312,12 @@ impl DeviceSlot {
                 .set_state(DeviceSlotState::Addressed);
         }
 
-        self.transfer_ring_controllers[0]
-            .as_ref()
-            .unwrap()
+        self.get_trc(0).unwrap()
             .set_dequeue_pointer(GuestAddress(
                 device_context.endpoint_context[0].get_tr_dequeue_pointer() << 4,
             ));
 
-        self.transfer_ring_controllers[0]
-            .as_ref()
-            .unwrap()
+        self.get_trc(0).unwrap()
             .set_consumer_cycle_state(
                 device_context.endpoint_context[0].get_dequeue_cycle_state() > 0,
             );
@@ -319,7 +329,7 @@ impl DeviceSlot {
     }
 
     // Adds or dropbs multiple endpoints in the device slot.
-    pub fn configure_endpoint(&mut self, trb: &ConfigureEndpointCommandTrb) -> TrbCompletionCode {
+    pub fn configure_endpoint(&self, trb: &ConfigureEndpointCommandTrb) -> TrbCompletionCode {
         debug!("configuring endpoint");
         let input_control_context: InputControlContext = match trb.get_deconfigure() > 0 {
             true => {
@@ -362,7 +372,7 @@ impl DeviceSlot {
     // Evaluates the device context by reading new values for certain fields of
     // the slot context and/ or control endpoint context.
     pub fn evaluate_context(&self, trb: &EvaluateContextCommandTrb) -> TrbCompletionCode {
-        if !self.enabled {
+        if !*self.enabled.lock().unwrap() {
             return TrbCompletionCode::SlotNotEnabledError;
         }
 
@@ -423,11 +433,10 @@ impl DeviceSlot {
     // Reset the device slot to default state and deconfigures all but the
     // control endpoint.
     pub fn reset_slot<C: Fn(TrbCompletionCode) + 'static + Send>(
-        slot: &Arc<Mutex<DeviceSlot>>,
+        slot: &Arc<DeviceSlot>,
         callback: C,
     ) {
-        let s = slot.lock().unwrap();
-        let state = s.state();
+        let state = slot.state();
         if state != DeviceSlotState::Addressed && state != DeviceSlotState::Configured {
             error!("reset slot failed due to context state error {:?}", state);
             callback(TrbCompletionCode::ContextStateError);
@@ -436,8 +445,7 @@ impl DeviceSlot {
 
         let weak_s = Arc::downgrade(&slot);
         let auto_callback = AutoCallback::new(move || {
-            let arc_s = weak_s.upgrade().unwrap();
-            let mut s = arc_s.lock().unwrap();
+            let s = weak_s.upgrade().unwrap();
             for i in 2..32 {
                 s.drop_one_endpoint(i);
             }
@@ -448,13 +456,12 @@ impl DeviceSlot {
             s.set_device_context(ctx);
             callback(TrbCompletionCode::Success);
         });
-        s.stop_all_trc(auto_callback);
+        slot.stop_all_trc(auto_callback);
     }
 
     pub fn stop_all_trc(&self, auto_callback: AutoCallback) {
-        for trc in &self.transfer_ring_controllers {
-            if trc.is_some() {
-                let trc: &Arc<TransferRingController> = trc.as_ref().unwrap();
+        for i in 0..self.trc_len() {
+            if let Some(trc) = self.get_trc(i) {
                 trc.stop(auto_callback.clone());
             }
         }
@@ -467,7 +474,7 @@ impl DeviceSlot {
             return;
         }
         let index = endpoint_id - 1;
-        match self.transfer_ring_controllers[index as usize] {
+        match self.get_trc(index as usize) {
             Some(ref trc) => {
                 debug!("stopping endpoint");
                 let auto_cb = AutoCallback::new(move || {
@@ -488,7 +495,7 @@ impl DeviceSlot {
             return TrbCompletionCode::TrbError;
         }
         let index = endpoint_id - 1;
-        match &self.transfer_ring_controllers[index as usize] {
+        match &self.get_trc(index as usize) {
             &Some(ref trc) => {
                 trc.set_dequeue_pointer(GuestAddress(ptr));
                 return TrbCompletionCode::Success;
@@ -500,16 +507,16 @@ impl DeviceSlot {
         }
     }
 
-    fn reset(&mut self) {
-        for i in 0..self.transfer_ring_controllers.len() {
-            self.transfer_ring_controllers[i] = None;
+    fn reset(&self) {
+        for i in 0..self.trc_len() {
+            self.set_trc(i, None);
         }
         debug!("reseting device slot {}!", self.slot_id);
-        self.enabled = false;
-        self.port_id = 0;
+        *self.enabled.lock().unwrap() = false;
+        *self.port_id.lock().unwrap() = 0;
     }
 
-    fn add_one_endpoint(&mut self, device_context_index: u8) {
+    fn add_one_endpoint(&self, device_context_index: u8) {
         debug!(
             "adding one endpoint, device context index {}",
             device_context_index
@@ -518,8 +525,8 @@ impl DeviceSlot {
         let transfer_ring_index = (device_context_index - 1) as usize;
         let trc = TransferRingController::new(
             self.mem.clone(),
-            self.hub.get_port(self.port_id).unwrap(),
-            self.event_loop.clone(),
+            self.hub.get_port(*self.port_id.lock().unwrap()).unwrap(),
+            self.event_loop.lock().unwrap().clone(),
             self.interrupter.clone(),
             self.slot_id,
             device_context_index,
@@ -530,14 +537,14 @@ impl DeviceSlot {
         trc.set_consumer_cycle_state(
             device_context.endpoint_context[transfer_ring_index].get_dequeue_cycle_state() > 0,
         );
-        self.transfer_ring_controllers[transfer_ring_index] = Some(trc);
+        self.set_trc(transfer_ring_index, Some(trc));
         device_context.endpoint_context[transfer_ring_index].set_state(EndpointState::Running);
         self.set_device_context(device_context);
     }
 
-    fn drop_one_endpoint(&mut self, device_context_index: u8) {
+    fn drop_one_endpoint(&self, device_context_index: u8) {
         let endpoint_index = (device_context_index - 1) as usize;
-        self.transfer_ring_controllers[endpoint_index] = None;
+        self.set_trc(endpoint_index, None);
         let mut ctx = self.get_device_context();
         ctx.endpoint_context[endpoint_index].set_state(EndpointState::Disabled);
         self.set_device_context(ctx);

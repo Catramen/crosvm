@@ -42,7 +42,7 @@ impl CommandRingTrbHandler {
         CommandRingTrbHandler { slots, interrupter }
     }
 
-    fn slot(&self, slot_id: u8) -> MutexGuard<DeviceSlot> {
+    fn slot(&self, slot_id: u8) -> Arc<DeviceSlot> {
         self.slots.slot(slot_id).unwrap()
     }
 
