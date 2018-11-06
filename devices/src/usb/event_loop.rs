@@ -5,31 +5,26 @@
 use sys_util::{EventFd, PollContext, WatchingEvents};
 use std::collections::HashMap;
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::{Arc, Weak, Mutex};
-use std::mem::drop;
+use std::sync::{mpsc, Weak};
 use std::thread;
 
 /// EpollEventLoop is an event loop blocked on a set of fds. When a monitered events is triggered,
 /// event loop will invoke the mapped handler.
 pub struct EventLoop {
-    poll_ctx: Arc<PollContext<u32>>,
-    handlers: Arc<Mutex<HashMap<RawFd, Weak<EventHandler>>>>,
-    stop_evt: EventFd,
-}
-
-impl Clone for EventLoop {
-    fn clone(&self) -> EventLoop {
-        EventLoop {
-            poll_ctx: self.poll_ctx.clone(),
-            handlers: self.handlers.clone(),
-            stop_evt: self.stop_evt.try_clone().unwrap(),
-        }
-    }
+    cmd_tx: mpsc::Sender<EpollThreadEvents>,
+    cmd_evt: EventFd,
 }
 
 /// Interface for event handler.
 pub trait EventHandler: Send + Sync {
     fn on_event(&self, fd: RawFd);
+}
+
+enum EpollThreadEvents {
+    Stop,
+    // Add pollfd with fd, events and handler.
+    AddPollFd(RawFd, WatchingEvents, Weak<EventHandler>),
+    DeleteFd(RawFd),
 }
 
 struct Fd(RawFd);
@@ -39,55 +34,65 @@ impl AsRawFd for Fd {
     }
 }
 
+impl Clone for EventLoop {
+    fn clone(&self) -> EventLoop {
+        EventLoop {
+            cmd_tx: self.cmd_tx.clone(),
+            cmd_evt: self.cmd_evt.try_clone().unwrap(),
+        }
+    }
+}
 impl EventLoop {
     /// Start an event loop.
     pub fn start() -> (EventLoop, thread::JoinHandle<()>) {
-        let (self_stop_evt, stop_evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
+        let (sender, receiver) = mpsc::channel::<EpollThreadEvents>();
+        let (self_cmd_evt, cmd_evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
             Err(_e) => panic!("failed creating cmd EventFd pair"),
         };
-
-        let mut fd_callbacks: Arc<Mutex<HashMap<RawFd, Weak<EventHandler>>>>
-            = Arc::new(Mutex::new(HashMap::new()));
-        let poll_ctx: PollContext<u32> = match PollContext::new()
-            .and_then(|pc| pc.add(&stop_evt, stop_evt.as_raw_fd() as u32).and(Ok(pc)))
+        let handle = thread::spawn(move || {
+            let mut fd_callbacks: HashMap<RawFd, Weak<EventHandler>> = HashMap::new();
+            let poll_ctx: PollContext<u32> = match PollContext::new()
+                .and_then(|pc| pc.add(&cmd_evt, cmd_evt.as_raw_fd() as u32).and(Ok(pc)))
             {
                 Ok(pc) => pc,
                 Err(_e) => panic!("failed creating PollContext"),
             };
-        let poll_ctx = Arc::new(poll_ctx);
-        let event_loop = EventLoop {
-            poll_ctx: poll_ctx.clone(),
-            handlers: fd_callbacks.clone(),
-            stop_evt: self_stop_evt,
-        };
-
-        let handle = thread::spawn(move || {
             loop {
                 let events = poll_ctx.wait().expect("Unable to poll");
                 for event in events.iter() {
-                    if event.token() == stop_evt.as_raw_fd() as u32 {
-                        return;
+                    if event.token() == cmd_evt.as_raw_fd() as u32 {
+                        let cnt = cmd_evt.read().unwrap();
+                        for _ in 0..cnt {
+                            let ev = receiver.recv().unwrap();
+                            match ev {
+                                EpollThreadEvents::Stop => return,
+                                EpollThreadEvents::AddPollFd(fd, events, handler) => {
+                                    poll_ctx.add_fd_with_events(&Fd(fd),
+                                                                events,
+                                                                fd as u32).unwrap();
+                                    fd_callbacks.insert(fd, handler);
+                                }
+                                EpollThreadEvents::DeleteFd(fd) => {
+                                    fd_callbacks.remove(&fd);
+                                }
+                            }
+                        }
                     } else {
                         let fd = event.token() as RawFd;
-                        let mut locked = fd_callbacks.lock().unwrap();
-                        let weak_handler = match locked.get(&fd) {
+                        let cb = match fd_callbacks.get(&fd) {
                             Some(cb) => cb.clone(),
                             None => {
-                                warn!("callback for fd {} already removed", fd);
+                                warn!("callback already removed");
                                 continue;
                             },
                         };
-                        match weak_handler.upgrade() {
-                            Some(handler) => {
-                                // Drop lock before triggering the event.
-                                drop(locked);
-                                handler.on_event(fd);
-                            }
+                        match cb.upgrade() {
+                            Some(handler) => handler.on_event(fd),
                             // If the handler is already gone, we remove the fd.
                             None => {
-                                let _ = poll_ctx.delete(&Fd(fd));
-                                locked.remove(&fd).unwrap();
+                                poll_ctx.delete(&Fd(fd)).unwrap();
+                                fd_callbacks.remove(&fd).unwrap();
                             },
                         };
                     }
@@ -95,24 +100,30 @@ impl EventLoop {
             }
         });
 
-        (event_loop, handle)
+        (EventLoop {
+            cmd_tx: sender,
+            cmd_evt: self_cmd_evt,
+        },
+        handle)
     }
 
     /// Add event to event loop.
     pub fn add_event(&self, fd: RawFd, events: WatchingEvents, handler: Weak<EventHandler>) {
-        self.poll_ctx.add_fd_with_events(&Fd(fd), events, fd as u32).unwrap();
-        self.handlers.lock().unwrap().insert(fd, handler);
+        self.cmd_tx.send(EpollThreadEvents::AddPollFd(fd, events, handler)).unwrap();
+        self.cmd_evt.write(1).unwrap();
     }
 
     /// Removes event for this RawFd.
     pub fn remove_event_for_fd(&self, fd: RawFd) {
-        self.poll_ctx.delete(&Fd(fd)).unwrap();
-        self.handlers.lock().unwrap().remove(&fd);
+        // Simply do nothing if the event loop is stopped.
+        let _ = self.cmd_tx.send(EpollThreadEvents::DeleteFd(fd));
+        let _ = self.cmd_evt.write(1);
     }
 
     /// Stops this event loop asynchronously. Triggered events might not be handled.
     pub fn stop(self) {
-        self.stop_evt.write(1).unwrap();
+        self.cmd_tx.send(EpollThreadEvents::Stop).unwrap();
+        self.cmd_evt.write(1).unwrap();
     }
 }
 
