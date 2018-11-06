@@ -28,8 +28,10 @@ enum RingBufferState {
 pub trait TransferDescriptorHandler {
     /// Process descriptor asynchronously, write complete_event when finishes.
     fn handle_transfer_descriptor(&self, descriptor: TransferDescriptor, complete_event: EventFd);
-    /// stop is called when trying to stop ring buffer controller.
-    fn stop(&self) {
+    /// stop is called when trying to stop ring buffer controller. Return true when stop
+    /// asynchronously.
+    fn stop(&self) -> bool {
+        true
     }
 }
 
@@ -111,9 +113,12 @@ where
             debug!("{} is already stopped", self.name.as_str());
             return;
         }
-        *state = RingBufferState::Stopping;
-        self.handler.lock().unwrap().stop();
-        self.stop_callback.lock().unwrap().push(callback);
+        if self.handler.lock().unwrap().stop() {
+            *state = RingBufferState::Stopping;
+            self.stop_callback.lock().unwrap().push(callback);
+        } else {
+            *state == RingBufferState::Stopped;
+        }
     }
 }
 
