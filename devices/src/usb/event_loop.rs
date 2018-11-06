@@ -68,12 +68,15 @@ impl EventLoop {
                             match ev {
                                 EpollThreadEvents::Stop => return,
                                 EpollThreadEvents::AddPollFd(fd, events, handler) => {
+                                    debug!("add event {}", fd);
                                     poll_ctx.add_fd_with_events(&Fd(fd),
                                                                 events,
                                                                 fd as u32).unwrap();
                                     fd_callbacks.insert(fd, handler);
                                 }
                                 EpollThreadEvents::DeleteFd(fd) => {
+                                    debug!("delete fd remove {}", fd);
+                                    let _ = poll_ctx.delete(&Fd(fd));
                                     fd_callbacks.remove(&fd);
                                 }
                             }
@@ -83,7 +86,9 @@ impl EventLoop {
                         let cb = match fd_callbacks.get(&fd) {
                             Some(cb) => cb.clone(),
                             None => {
-                                warn!("callback already removed");
+                                warn!("callback already removed for {} readable {} 
+                                      hungup {}", fd, event.readable(), event.hungup());
+                                let _ = poll_ctx.delete(&Fd(fd));
                                 continue;
                             },
                         };
@@ -91,6 +96,7 @@ impl EventLoop {
                             Some(handler) => handler.on_event(fd),
                             // If the handler is already gone, we remove the fd.
                             None => {
+                                debug!("delete fd remove {}", fd);
                                 poll_ctx.delete(&Fd(fd)).unwrap();
                                 fd_callbacks.remove(&fd).unwrap();
                             },
