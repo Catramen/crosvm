@@ -74,6 +74,8 @@ impl EventLoop {
                                     fd_callbacks.insert(fd, handler);
                                 }
                                 EpollThreadEvents::DeleteFd(fd) => {
+                                    // The fd might already be closed.
+                                    let _ = poll_ctx.delete(&Fd(fd));
                                     fd_callbacks.remove(&fd);
                                 }
                             }
@@ -91,7 +93,7 @@ impl EventLoop {
                             Some(handler) => handler.on_event(fd),
                             // If the handler is already gone, we remove the fd.
                             None => {
-                                poll_ctx.delete(&Fd(fd)).unwrap();
+                                let _ = poll_ctx.delete(&Fd(fd));
                                 fd_callbacks.remove(&fd).unwrap();
                             },
                         };
