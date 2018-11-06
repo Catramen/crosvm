@@ -67,6 +67,7 @@ where
             event: evt,
         });
         let event_handler: Arc<EventHandler> = controller.clone();
+        debug!("event loop add event {} name {}", rawfd, name);
         event_loop.add_event(
             rawfd,
             WatchingEvents::empty().set_read(),

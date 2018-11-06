@@ -57,6 +57,7 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
             hub,
         ));
         let handler: Arc<EventHandler> = inner.clone();
+        debug!("event loop add event {} device provider", event_fd);
         event_loop.add_event(
             event_fd,
             WatchingEvents::empty().set_read(),

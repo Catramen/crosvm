@@ -31,6 +31,7 @@ impl Context {
 
     fn init_event_handler(&self) {
         for pollfd in self.context.get_pollfd_iter() {
+            debug!("event loop add event {} events handler", pollfd.fd);
             self.event_loop.lock().unwrap().add_event(pollfd.fd,
                                       WatchingEvents::new(pollfd.events as u32),
                                       Arc::downgrade(&self.event_handler)
@@ -81,6 +82,7 @@ struct PollfdChangeHandler {
 
 impl LibUsbPollfdChangeHandler for PollfdChangeHandler {
     fn add_poll_fd(&self, fd: RawFd, events: c_short) {
+        debug!("event loop add event {} poll fd change handler", fd);
         self.event_loop.add_event(fd,
                                   WatchingEvents::new(events as u32),
                                   self.event_handler.clone(),
@@ -88,6 +90,10 @@ impl LibUsbPollfdChangeHandler for PollfdChangeHandler {
     }
 
     fn remove_poll_fd(&self, fd: RawFd) {
+        if let Some(h) = self.event_handler.upgrade() {
+            debug!("call context handle events before remove fd {}", fd);
+            h.on_event(0);
+        }
         self.event_loop.remove_event_for_fd(fd);
     }
 }

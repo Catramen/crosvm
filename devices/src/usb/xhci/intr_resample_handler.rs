@@ -28,6 +28,7 @@ impl IntrResampleHandler {
             irq_evt,
         });
         let tmp_handler: Arc<EventHandler> = handler.clone();
+        debug!("event loop add event {} - IntrResampleHandler", rawfd);
         event_loop.add_event(
             rawfd,
             WatchingEvents::empty().set_read(),
