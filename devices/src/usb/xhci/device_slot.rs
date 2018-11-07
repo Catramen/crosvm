@@ -46,7 +46,7 @@ impl DeviceSlots {
         dcbaap: Register<u64>,
         hub: Arc<UsbHub>,
         interrupter: Arc<Mutex<Interrupter>>,
-        event_loop: EventLoop,
+        event_loop: Arc<EventLoop>,
         mem: GuestMemory,
     ) -> DeviceSlots {
         let mut vec = Vec::new();
@@ -115,7 +115,7 @@ pub struct DeviceSlot {
     dcbaap: Register<u64>,
     hub: Arc<UsbHub>,
     interrupter: Arc<Mutex<Interrupter>>,
-    event_loop: Mutex<EventLoop>,
+    event_loop: Arc<EventLoop>,
     mem: GuestMemory,
     enabled: Mutex<bool>,
     transfer_ring_controllers: Mutex<Vec<Option<Arc<TransferRingController>>>>,
@@ -127,7 +127,7 @@ impl DeviceSlot {
         dcbaap: Register<u64>,
         hub: Arc<UsbHub>,
         interrupter: Arc<Mutex<Interrupter>>,
-        event_loop: EventLoop,
+        event_loop: Arc<EventLoop>,
         mem: GuestMemory,
     ) -> Self {
         let mut transfer_ring_controllers = Vec::new();
@@ -140,7 +140,7 @@ impl DeviceSlot {
             dcbaap,
             hub,
             interrupter,
-            event_loop: Mutex::new(event_loop),
+            event_loop,
             mem,
             enabled: Mutex::new(false),
             transfer_ring_controllers: Mutex::new(transfer_ring_controllers),
@@ -285,7 +285,7 @@ impl DeviceSlot {
         self.set_trc(0, Some(TransferRingController::new(
             self.mem.clone(),
             self.hub.get_port(*self.port_id.lock().unwrap()).unwrap(),
-            self.event_loop.lock().unwrap().clone(),
+            self.event_loop.clone(),
             self.interrupter.clone(),
             self.slot_id,
             1,
@@ -526,7 +526,7 @@ impl DeviceSlot {
         let trc = TransferRingController::new(
             self.mem.clone(),
             self.hub.get_port(*self.port_id.lock().unwrap()).unwrap(),
-            self.event_loop.lock().unwrap().clone(),
+            self.event_loop.clone(),
             self.interrupter.clone(),
             self.slot_id,
             device_context_index,

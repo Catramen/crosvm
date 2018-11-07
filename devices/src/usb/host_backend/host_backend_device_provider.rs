@@ -46,7 +46,7 @@ impl HostBackendDeviceProvider {
 }
 
 impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
-    fn start(&mut self, event_loop: EventLoop, hub: Arc<UsbHub>) {
+    fn start(&mut self, event_loop: Arc<EventLoop>, hub: Arc<UsbHub>) {
         if self.inner.is_some() {
             panic!("Host backend provider event loop is already set");
         }
@@ -81,7 +81,7 @@ struct ProviderInner {
 impl ProviderInner {
     fn new(
         sock: MsgSocket<UsbControlResult, UsbControlCommand>,
-        event_loop: EventLoop,
+        event_loop: Arc<EventLoop>,
         usb_hub: Arc<UsbHub>,
     ) -> ProviderInner {
         ProviderInner {

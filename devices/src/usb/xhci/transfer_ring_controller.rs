@@ -63,7 +63,7 @@ impl TransferRingController {
     pub fn new(
         mem: GuestMemory,
         port: Arc<UsbPort>,
-        event_loop: EventLoop,
+        event_loop: Arc<EventLoop>,
         interrupter: Arc<Mutex<Interrupter>>,
         slot_id: u8,
         endpoint_id: u8,

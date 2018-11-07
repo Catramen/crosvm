@@ -42,6 +42,7 @@ impl Xhci {
             irq_evt.try_clone().unwrap(),
             &regs,
         )));
+        let event_loop = Arc::new(event_loop);
         let intr_resample_handler =
             IntrResampleHandler::start(&event_loop, interrupter.clone(), irq_resample_evt, irq_evt);
         let hub = Arc::new(UsbHub::new(&regs, interrupter.clone()));

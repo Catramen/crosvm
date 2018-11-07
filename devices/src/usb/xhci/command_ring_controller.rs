@@ -19,7 +19,7 @@ pub type CommandRingController = RingBufferController<CommandRingTrbHandler>;
 impl CommandRingController {
     pub fn new(
         mem: GuestMemory,
-        event_loop: EventLoop,
+        event_loop: Arc<EventLoop>,
         slots: DeviceSlots,
         interrupter: Arc<Mutex<Interrupter>>,
     ) -> Arc<CommandRingController> {

@@ -13,16 +13,16 @@ use usb_util::libusb_device::LibUsbDevice;
 /// Context wraps libusb context with libusb event handling.
 pub struct Context {
     context: LibUsbContext,
-    event_loop: Mutex<EventLoop>,
+    event_loop: Arc<EventLoop>,
     event_handler: Arc<EventHandler>,
 }
 
 impl Context {
-    pub fn new(event_loop: EventLoop) -> Context {
+    pub fn new(event_loop: Arc<EventLoop>) -> Context {
         let context = LibUsbContext::new().unwrap();
         let ctx = Context {
             context: context.clone(),
-            event_loop: Mutex::new(event_loop),
+            event_loop: event_loop,
             event_handler: Arc::new(LibUsbEventHandler{context: context.clone()}),
         };
         ctx.init_event_handler();
@@ -32,15 +32,15 @@ impl Context {
     fn init_event_handler(&self) {
         for pollfd in self.context.get_pollfd_iter() {
             debug!("event loop add event {} events handler", pollfd.fd);
-            self.event_loop.lock().unwrap().add_event(pollfd.fd,
+            self.event_loop.add_event(pollfd.fd,
                                       WatchingEvents::new(pollfd.events as u32),
                                       Arc::downgrade(&self.event_handler)
-                                      );
+            );
         }
 
         self.context.set_pollfd_notifiers(Box::new(
                 PollfdChangeHandler {
-                    event_loop: self.event_loop.lock().unwrap().clone(),
+                    event_loop: self.event_loop.clone(),
                     event_handler: Arc::downgrade(&self.event_handler),
                 }
                 ));
@@ -76,7 +76,7 @@ impl EventHandler for LibUsbEventHandler {
 }
 
 struct PollfdChangeHandler {
-    event_loop: EventLoop,
+    event_loop: Arc<EventLoop>,
     event_handler: Weak<EventHandler>,
 }
 

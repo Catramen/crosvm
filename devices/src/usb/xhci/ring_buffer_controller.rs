@@ -42,7 +42,7 @@ pub struct RingBufferController<T: 'static + TransferDescriptorHandler> {
     stop_callback: Mutex<Vec<AutoCallback>>,
     ring_buffer: Mutex<RingBuffer>,
     handler: Mutex<T>,
-    event_loop: Mutex<EventLoop>,
+    event_loop: Arc<EventLoop>,
     event: EventFd,
 }
 
@@ -54,7 +54,7 @@ where
     pub fn create_controller(
         name: String,
         mem: GuestMemory,
-        event_loop: EventLoop,
+        event_loop: Arc<EventLoop>,
         handler: T,
     ) -> Arc<RingBufferController<T>> {
         let evt = EventFd::new().unwrap();
@@ -65,7 +65,7 @@ where
             stop_callback: Mutex::new(Vec::new()),
             ring_buffer: Mutex::new(RingBuffer::new(name.clone(), mem)),
             handler: Mutex::new(handler),
-            event_loop: Mutex::new(event_loop.clone()),
+            event_loop: event_loop.clone(),
             event: evt,
         });
         let event_handler: Arc<EventHandler> = controller.clone();
@@ -129,8 +129,6 @@ where
     fn drop(&mut self) {
         // Remove self from the event loop.
         self.event_loop
-            .lock()
-            .unwrap()
             .remove_event_for_fd(EventFd::as_raw_fd(&self.event));
     }
 }
