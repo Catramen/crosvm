@@ -8,6 +8,7 @@ mod auto_callback;
 mod event_loop;
 #[allow(dead_code)]
 pub mod host_backend;
+pub mod async_job_queue;
 
 pub mod xhci;
 

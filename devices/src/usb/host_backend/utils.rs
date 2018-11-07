@@ -60,7 +60,7 @@ pub fn submit_transfer<T: UsbTransferBuffer>(xhci_transfer: &Arc<XhciTransfer>,
                     xhci_transfer.on_transfer_complete(TransferStatus::NoDevice, 0);
                 },
                 // If it's submitted, we don't need to send on_transfer_complete now.
-                _ => ,
+                _ => (),
             }
         },
         XhciTransferState::Cancelled => {
