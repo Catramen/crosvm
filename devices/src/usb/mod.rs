@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-pub mod xhci;
+pub mod async_job_queue;
 pub mod host_backend;
+pub mod xhci;
 
 mod auto_callback;
 mod event_loop;
