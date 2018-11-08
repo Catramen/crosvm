@@ -16,6 +16,7 @@ use usb::event_loop::EventLoop;
 use usb::xhci::usb_hub::UsbHub;
 use msg_socket::{MsgSocket, MsgReceiver, MsgSender};
 use vm_control::{UsbControlCommand, UsbControlResult, UsbControlSocket};
+use usb::async_job_queue::AsyncJobQueue;
 
 const SOCKET_TIMEOUT_MS: u64 = 2000;
 
@@ -73,6 +74,7 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
 
 /// ProviderInner listens to control socket.
 struct ProviderInner {
+    job_queue: Arc<AsyncJobQueue>,
     ctx: Context,
     sock: MsgSocket<UsbControlResult, UsbControlCommand>,
     usb_hub: Arc<UsbHub>,
@@ -85,6 +87,7 @@ impl ProviderInner {
         usb_hub: Arc<UsbHub>,
     ) -> ProviderInner {
         ProviderInner {
+            job_queue: AsyncJobQueue::init(&event_loop),
             ctx: Context::new(event_loop),
             sock,
             usb_hub,
@@ -112,7 +115,8 @@ impl EventHandler for ProviderInner {
                         return;
                     }
                 };
-                let device = Box::new(HostDevice::new(device, device_handle));
+                let device = Box::new(HostDevice::new(self.job_queue.clone(),
+                        device, device_handle));
                 debug!("new host device created");
                 let port = self.usb_hub.connect_backend(device);
                 debug!("connected");

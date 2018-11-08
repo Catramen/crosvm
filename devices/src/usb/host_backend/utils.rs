@@ -8,6 +8,7 @@ use std::mem::{swap, drop};
 use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferState};
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, UsbTransferBuffer, BulkTransferBuffer, TransferStatus};
+use usb::async_job_queue::AsyncJobQueue;
 
 /// Update transfer state, return true if it's cancelled.
 pub fn update_state<T: UsbTransferBuffer>(xhci_transfer: &Arc<XhciTransfer>,
@@ -35,42 +36,50 @@ pub fn update_state<T: UsbTransferBuffer>(xhci_transfer: &Arc<XhciTransfer>,
     }
 }
 /// Helper function to submit usb_transfer to device handle.
-pub fn submit_transfer<T: UsbTransferBuffer>(xhci_transfer: &Arc<XhciTransfer>,
+pub fn submit_transfer<T: UsbTransferBuffer>(job_queue: &Arc<AsyncJobQueue>,
+                                             xhci_transfer: Arc<XhciTransfer>,
                                              device_handle: &Arc<Mutex<DeviceHandle>>,
                                              usb_transfer: UsbTransfer<T>) {
-    // We need to hold the lock to avoid race condition.
-    let mut state = xhci_transfer.state().lock().unwrap();
-    let mut tmp = XhciTransferState::Cancelled;
-    swap(&mut *state, &mut tmp);
-    match tmp {
-        XhciTransferState::Created => {
-            let canceller = usb_transfer.get_canceller();
-            let cancel_cb = Box::new(move || {
-                match canceller.try_cancel() {
-                    true => debug!("cancel issued to libusb backend"),
-                    false => debug!("fail to cancel"),
+    let transfer_status = {
+        // We need to hold the lock to avoid race condition.
+        let mut state = xhci_transfer.state().lock().unwrap();
+        let mut tmp = XhciTransferState::Cancelled;
+        swap(&mut *state, &mut tmp);
+        match tmp {
+            XhciTransferState::Created => {
+                let canceller = usb_transfer.get_canceller();
+                let cancel_cb = Box::new(move || {
+                    match canceller.try_cancel() {
+                        true => debug!("cancel issued to libusb backend"),
+                        false => debug!("fail to cancel"),
+                    }
+                });
+                *state = XhciTransferState::Submitted(cancel_cb);
+                match device_handle.lock().unwrap().submit_async_transfer(usb_transfer) {
+                    Err(e) => {
+                        error!("fail to submit transfer {:?}", e);
+                        *state = XhciTransferState::Completed;
+                        TransferStatus::NoDevice
+                    },
+                    // If it's submitted, we don't need to send on_transfer_complete now.
+                    _ => return,
                 }
-            });
-            *state = XhciTransferState::Submitted(cancel_cb);
-            match device_handle.lock().unwrap().submit_async_transfer(usb_transfer) {
-                Err(e) => {
-                    error!("fail to submit transfer {:?}", e);
-                    *state = XhciTransferState::Completed;
-                    drop(state);
-                    xhci_transfer.on_transfer_complete(TransferStatus::NoDevice, 0);
-                },
-                // If it's submitted, we don't need to send on_transfer_complete now.
-                _ => (),
+            },
+            XhciTransferState::Cancelled => {
+                warn!("Transfer is already cancelled");
+                TransferStatus::Cancelled
+            },
+            _ => {
+                panic!("there is a bug");
             }
-        },
-        XhciTransferState::Cancelled => {
-            warn!("Transfer is already cancelled");
-            drop(state);
-            xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
         }
-        _ => {
-            panic!("there is a bug");
+    };
+    // We are holding locks to of backends, we want to call on_transfer_complete
+    // without any lock.
+    job_queue.queue_job(
+        move || {
+            xhci_transfer.on_transfer_complete(&transfer_status, 0);
         }
-    }
+    );
 }
 

@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use super::usb_endpoint::UsbEndpoint;
 use super::utils::{update_state, submit_transfer};
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
+use usb::async_job_queue::AsyncJobQueue;
 
 #[derive(PartialEq)]
 pub enum ControlEndpointState {
@@ -81,6 +82,7 @@ pub struct HostDevice {
     host_claimed_interfaces: Vec<i32>,
     control_request_setup: UsbRequestSetup,
     buffer: Option<ScatterGatherBuffer>,
+    job_queue: Arc<AsyncJobQueue>,
 }
 
 impl Drop for HostDevice {
@@ -91,7 +93,7 @@ impl Drop for HostDevice {
 }
 
 impl HostDevice {
-    pub fn new(device: LibUsbDevice, device_handle: DeviceHandle) -> HostDevice {
+    pub fn new(job_queue: Arc<AsyncJobQueue>, device: LibUsbDevice, device_handle: DeviceHandle) -> HostDevice {
         let mut device = HostDevice {
             endpoints: vec![],
             device,
@@ -102,6 +104,7 @@ impl HostDevice {
             host_claimed_interfaces: vec![],
             control_request_setup: UsbRequestSetup::new(0, 0, 0, 0, 0),
             buffer: None,
+            job_queue,
         };
         device.detach_host_drivers();
         device
@@ -171,7 +174,7 @@ impl HostDevice {
                 }
                 debug!("setup stage setup buffer {:?}", setup);
                 self.control_request_setup = setup;
-                xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0);
                 self.ctl_ep_state = ControlEndpointState::DataStage;
             },
             XhciTransferType::DataStage(buffer) => {
@@ -180,7 +183,7 @@ impl HostDevice {
                     return;
                  }
                  self.buffer = Some(buffer);
-                 xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                 xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0);
                  self.ctl_ep_state = ControlEndpointState::StatusStage;
 
             },
@@ -207,42 +210,42 @@ impl HostDevice {
                                         match *state {
                                             XhciTransferState::Cancelled => {
                                                 drop(state);
-                                                xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
+                                                xhci_transfer.on_transfer_complete(&TransferStatus::Cancelled, 0);
                                             },
                                             XhciTransferState::Completed => {
                                                 let status = t.status();
                                                 // Use actual length soon.
                                                 let _actual_length = t.actual_length();
                                                 drop(state);
-                                                xhci_transfer.on_transfer_complete(status, 0);
+                                                xhci_transfer.on_transfer_complete(&status, 0);
                                             },
                                             _ => {
                                                 panic!("should not take this branch");
                                             }
                                         }
                                     });
-                                submit_transfer(&tmp_transfer, &self.device_handle, control_transfer);
+                                submit_transfer(&self.job_queue, tmp_transfer, &self.device_handle, control_transfer);
                             },
                             HostToDeviceControlRequest::SetAddress => {
                                 debug!("host device handling set address");
                                 let addr = self.control_request_setup.value as u32;
                                 self.set_address(addr);
-                                xhci_transfer.on_transfer_complete(TransferStatus::Completed, 0);
+                                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0);
                             },
                             HostToDeviceControlRequest::SetConfig => {
                                 debug!("host device handling set config");
                                 let status = self.set_config();
-                                xhci_transfer.on_transfer_complete(status, 0);
+                                xhci_transfer.on_transfer_complete(&status, 0);
                             },
                             HostToDeviceControlRequest::SetInterface => {
                                 debug!("host device handling set interface");
                                 let status = self.set_interface();
-                                xhci_transfer.on_transfer_complete(status, 0);
+                                xhci_transfer.on_transfer_complete(&status, 0);
                             },
                             HostToDeviceControlRequest::ClearFeature => {
                                 debug!("host device handling clear feature");
                                 let status = self.clear_feature();
-                                xhci_transfer.on_transfer_complete(status, 0);
+                                xhci_transfer.on_transfer_complete(&status, 0);
                             }
                         };
                     },
@@ -258,7 +261,7 @@ impl HostDevice {
                                 XhciTransferState::Cancelled => {
                                     debug!("transfer cancelled");
                                     drop(state);
-                                    xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
+                                    xhci_transfer.on_transfer_complete(&TransferStatus::Cancelled, 0);
                                 },
                                 XhciTransferState::Completed => {
                                     let status = t.status();
@@ -268,14 +271,14 @@ impl HostDevice {
                                         debug!("transfer completed bytes: {} actual length {}", bytes, actual_length);
                                     }
                                     drop(state);
-                                    xhci_transfer.on_transfer_complete(status, 0);
+                                    xhci_transfer.on_transfer_complete(&status, 0);
                                 },
                                 _ => {
                                     panic!("should not take this branch");
                                 }
                             }
                         });
-                        submit_transfer(&tmp_transfer, &self.device_handle, control_transfer);
+                        submit_transfer(&self.job_queue, tmp_transfer, &self.device_handle, control_transfer);
                     },
                     _ => error!("Unknown transfer direction!"),
                 }
@@ -365,7 +368,7 @@ impl HostDevice {
                 let direction = ep_dp.get_direction();
                 let ty = ep_dp.get_endpoint_type().unwrap();
                 self.endpoints.push(
-                    UsbEndpoint::new(self.device_handle.clone(), ep_num, direction, ty));
+                    UsbEndpoint::new(self.job_queue.clone() ,self.device_handle.clone(), ep_num, direction, ty));
             }
         }
     }
@@ -396,7 +399,7 @@ impl XhciBackendDevice for HostDevice {
             }
         }
         warn!("Could not find endpoint for transfer");
-        transfer.on_transfer_complete(TransferStatus::Error, 0);
+        transfer.on_transfer_complete(&TransferStatus::Error, 0);
     }
 
     fn set_address(&mut self, address: UsbDeviceAddress) {

@@ -10,9 +10,11 @@ use usb_util::types::{EndpointType, EndpointDirection, ENDPOINT_DIRECTION_OFFSET
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{UsbTransfer, BulkTransferBuffer, TransferStatus, bulk_transfer, interrupt_transfer};
 use super::utils::{submit_transfer, update_state};
+use usb::async_job_queue::AsyncJobQueue;
 
 /// Isochronous, Bulk or Interrupt endpoint.
 pub struct UsbEndpoint {
+    job_queue: Arc<AsyncJobQueue>,
     device_handle: Arc<Mutex<DeviceHandle>>,
     endpoint_number: u8,
     direction: EndpointDirection,
@@ -20,13 +22,15 @@ pub struct UsbEndpoint {
 }
 
 impl UsbEndpoint {
-    pub fn new(device_handle: Arc<Mutex<DeviceHandle>>,
+    pub fn new(job_queue: Arc<AsyncJobQueue>,
+               device_handle: Arc<Mutex<DeviceHandle>>,
                endpoint_number: u8,
                direction: EndpointDirection,
                ty: EndpointType
                ) -> UsbEndpoint {
         assert!(ty != EndpointType::Control);
         UsbEndpoint {
+            job_queue,
             device_handle,
             endpoint_number,
             direction,
@@ -65,7 +69,7 @@ impl UsbEndpoint {
             XhciTransferType::Normal(buffer) => buffer,
             _ => {
                 error!("Wrong transfer type, not handled.");
-                transfer.on_transfer_complete(TransferStatus::Error, 0);
+                transfer.on_transfer_complete(&TransferStatus::Error, 0);
                 return;
             },
         };
@@ -78,7 +82,7 @@ impl UsbEndpoint {
                 self.handle_interrupt_transfer(transfer, buffer);
             },
             _ => {
-                transfer.on_transfer_complete(TransferStatus::Error, 0);
+                transfer.on_transfer_complete(&TransferStatus::Error, 0);
             }
         }
     }
@@ -111,21 +115,21 @@ impl UsbEndpoint {
                         XhciTransferState::Cancelled => {
                             debug!("transfer has been cancelled");
                             drop(state);
-                            xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
+                            xhci_transfer.on_transfer_complete(&TransferStatus::Cancelled, 0);
                         }
                         XhciTransferState::Completed => {
                             xhci_transfer.print();
                             let status = t.status();
                             let actual_length = t.actual_length();
                             drop(state);
-                            xhci_transfer.on_transfer_complete(status, actual_length as u32);
+                            xhci_transfer.on_transfer_complete(&status, actual_length as u32);
                         }
                         _ => {
                             panic!("should not take this branch");
                         }
                     }
                 });
-                submit_transfer(&tmp_transfer, &self.device_handle, usb_transfer);
+                submit_transfer(&self.job_queue ,tmp_transfer, &self.device_handle, usb_transfer);
             },
             EndpointDirection::DeviceToHost => {
                 debug!("in transfer ep_addr {:#x}, buffer len {}", self.ep_addr(), buffer.len());
@@ -140,7 +144,7 @@ impl UsbEndpoint {
                         XhciTransferState::Cancelled => {
                             debug!("transfer has been cancelled");
                             drop(state);
-                            xhci_transfer.on_transfer_complete(TransferStatus::Cancelled, 0);
+                            xhci_transfer.on_transfer_complete(&TransferStatus::Cancelled, 0);
                         }
                         XhciTransferState::Completed => {
                             let status = t.status();
@@ -154,7 +158,7 @@ impl UsbEndpoint {
                                 }
                             };
                             drop(state);
-                            xhci_transfer.on_transfer_complete(status, actual_length as u32);
+                            xhci_transfer.on_transfer_complete(&status, actual_length as u32);
                         }
                         _ => {
                             panic!("should not take this branch");
@@ -163,7 +167,7 @@ impl UsbEndpoint {
 
                 });
 
-                submit_transfer(&tmp_transfer, &self.device_handle, usb_transfer);
+                submit_transfer(&self.job_queue, tmp_transfer, &self.device_handle, usb_transfer);
             },
         }
     }

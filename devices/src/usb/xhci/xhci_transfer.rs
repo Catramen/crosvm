@@ -228,22 +228,22 @@ impl XhciTransfer {
     }
 
     /// This functions should be invoked when transfer is completed (or failed).
-    pub fn on_transfer_complete(&self, status: TransferStatus, bytes_transferred: u32) {
+    pub fn on_transfer_complete(&self, status: &TransferStatus, bytes_transferred: u32) {
         match status {
-            TransferStatus::NoDevice => {
+            &TransferStatus::NoDevice => {
                 debug!("device disconnected, detaching from port");
                 self.port.detach();
                 // If the device is gone, we don't need to send transfer completion event, cause we
                 // are going to destroy everything related to this device anyway.
                 return;
             },
-            TransferStatus::Cancelled => {
+            &TransferStatus::Cancelled => {
                 // TODO(jkwang) According to the spec, we should send a stopped event here. But kernel driver
                 // does not do anything meaningful when it sees a stopped event.
                 self.transfer_completion_event.write(1).unwrap();
                 return;
             },
-            TransferStatus::Completed => {
+            &TransferStatus::Completed => {
                 self.transfer_completion_event.write(1).unwrap();
             },
             _ => {
