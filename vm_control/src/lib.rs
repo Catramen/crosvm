@@ -192,6 +192,7 @@ impl VmRequest {
         run_mode: &mut Option<VmRunMode>,
         balloon_host_socket: &UnixDatagram,
         disk_host_sockets: &[MsgSocket<VmRequest, VmResponse>],
+        usb_control_socket: &UsbControlSocket,
     ) -> VmResponse {
         match *self {
             VmRequest::Exit => {
@@ -288,7 +289,18 @@ impl VmRequest {
                 }
             }
             VmRequest::UsbCommand(ref cmd) => {
-                panic!("not handled yet");
+                let res = usb_control_socket.send(cmd);
+                if let Err(e) = res {
+                    error!("fail to send command to usb control socket {:?}", e);
+                    return VmResponse::Err(SysError::new(EIO));
+                }
+                match usb_control_socket.recv() {
+                    Ok(response) => VmResponse::UsbResponse(response),
+                    Err(e) => {
+                        error!("fail to recv command from usb control socket {:?}", e);
+                        return VmResponse::Err(SysError::new(EIO));
+                    }
+                }
             }
         }
     }

@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #[macro_use]
-mod error;
+pub mod error;
 
 pub mod async_job_queue;
 pub mod host_backend;

@@ -23,7 +23,7 @@ use libc::{self, c_int};
 
 use audio_streams::DummyStreamSource;
 use byteorder::{ByteOrder, LittleEndian};
-use devices::{self, PciDevice, VirtioPciDevice};
+use devices::{self, PciDevice, VirtioPciDevice, XhciController, HostBackendDeviceProvider};
 use io_jail::{self, Minijail};
 use kvm::*;
 use libcras::CrasClient;
@@ -35,7 +35,7 @@ use sync::{Condvar, Mutex};
 use sys_util;
 use sys_util::*;
 use vhost;
-use vm_control::{VmRequest, VmResponse, VmRunMode};
+use vm_control::{VmRequest, VmResponse, VmRunMode, UsbControlSocket};
 
 use Config;
 
@@ -59,6 +59,7 @@ pub enum Error {
     CreateSocket(io::Error),
     CreateTapDevice(NetError),
     CreateTimerFd(sys_util::Error),
+    CreateUsbProvider(devices::usb::error::Error),
     DetectImageType(qcow::Error),
     DeviceJail(io_jail::Error),
     DevicePivotRoot(io_jail::Error),
@@ -113,6 +114,7 @@ impl fmt::Display for Error {
             Error::CreateSocket(e) => write!(f, "failed to create socket: {}", e),
             Error::CreateTapDevice(e) => write!(f, "failed to create tap device: {:?}", e),
             Error::CreateTimerFd(e) => write!(f, "failed to create timerfd: {}", e),
+            Error::CreateUsbProvider(e) => write!(f, "failed to create usb provider: {:?}", e),
             Error::DetectImageType(e) => write!(f, "failed to detect disk image type: {:?}", e),
             Error::DeviceJail(e) => write!(f, "failed to jail device: {}", e),
             Error::DevicePivotRoot(e) => write!(f, "failed to pivot root device: {}", e),
@@ -217,6 +219,7 @@ fn create_virtio_devs(
     wayland_device_socket: UnixDatagram,
     balloon_device_socket: UnixDatagram,
     disk_device_sockets: &mut Vec<UnixDatagram>,
+    usb_provider: HostBackendDeviceProvider,
 ) -> std::result::Result<Vec<(Box<PciDevice + 'static>, Option<Minijail>)>, Box<error::Error>> {
     static DEFAULT_PIVOT_ROOT: &str = "/var/empty";
 
@@ -665,6 +668,9 @@ fn create_virtio_devs(
         };
         pci_devices.push((null_audio_box, null_audio_jail));
     }
+    // Create xhci controller.
+    let usb_controller = XhciController::new(mem.clone(), usb_provider);
+    pci_devices.push((Box::new(usb_controller), Some(Minijail::new().unwrap())));
 
     Ok(pci_devices)
 }
@@ -845,6 +851,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
         info!("crosvm entering multiprocess mode");
     }
 
+    let (usb_control_socket, usb_provider) = HostBackendDeviceProvider::new().map_err(|e| {Error::CreateUsbProvider(e)})?;
     // Masking signals is inherently dangerous, since this can persist across clones/execs. Do this
     // before any jailed devices have been spawned, so that we can catch any of them that fail very
     // quickly.
@@ -903,6 +910,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
             wayland_device_socket,
             balloon_device_socket,
             &mut disk_device_sockets,
+            usb_provider,
         )
     })
     .map_err(Error::BuildingVm)?;
@@ -911,6 +919,7 @@ pub fn run_config(cfg: Config) -> Result<()> {
         control_sockets,
         balloon_host_socket,
         &disk_host_sockets,
+        usb_control_socket,
         sigchld_fd,
     )
 }
@@ -920,6 +929,7 @@ fn run_control(
     control_sockets: Vec<UnlinkMsgSocket<VmResponse, VmRequest>>,
     balloon_host_socket: UnixDatagram,
     disk_host_sockets: &[MsgSocket<VmRequest, VmResponse>],
+    usb_control_socket: UsbControlSocket,
     sigchld_fd: SignalFd,
 ) -> Result<()> {
     // Paths to get the currently available memory and the low memory threshold.
@@ -1164,6 +1174,7 @@ fn run_control(
                                     &mut linux.resources,
                                     &mut run_mode_opt,
                                     &balloon_host_socket,
+                                    &usb_control_socket,
                                     disk_host_sockets,
                                 );
                                 if let Err(e) = socket.send(&response) {

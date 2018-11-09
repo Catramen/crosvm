@@ -40,19 +40,19 @@ pub enum HostBackendDeviceProvider {
 }
 
 impl HostBackendDeviceProvider {
-    pub fn new() -> (UsbControlSocket, HostBackendDeviceProvider) {
-        let (child_sock, control_sock) = UnixDatagram::pair().unwrap();
+    pub fn new() -> Result<(UsbControlSocket, HostBackendDeviceProvider)> {
+        let (child_sock, control_sock) = UnixDatagram::pair().map_err(err_msg!(Error::Unknown))?;
         control_sock
             .set_write_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS)))
-            .unwrap();
+            .map_err(err_msg!(Error::Unknown))?;
         control_sock
             .set_read_timeout(Some(Duration::from_millis(SOCKET_TIMEOUT_MS)))
-            .unwrap();
+            .map_err(err_msg!(Error::Unknown))?;
 
         let provider = HostBackendDeviceProvider::Created {
             sock: MsgSocket::new(child_sock),
         };
-        (MsgSocket::new(control_sock), provider)
+        Ok((MsgSocket::new(control_sock), provider))
     }
 }
 
