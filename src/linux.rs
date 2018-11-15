@@ -670,7 +670,44 @@ fn create_virtio_devs(
     }
     // Create xhci controller.
     let usb_controller = XhciController::new(mem.clone(), usb_provider);
-    pci_devices.push((Box::new(usb_controller), Some(Minijail::new().unwrap())));
+
+    let jail = if cfg.multiprocess {
+        let policy_path: PathBuf = cfg.seccomp_policy_dir.join("xhci.policy");
+        let mut jail = create_base_minijail(empty_root_path, &policy_path)?;
+        jail.mount_with_data(
+            Path::new("none"),
+            Path::new("/"),
+            "tmpfs",
+            (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as usize,
+            "size=67108864",
+            ).unwrap();
+        let sys_usb_path = Path::new("/sys/bus/usb");
+        jail.mount_bind(sys_usb_path, sys_usb_path, false).unwrap();
+        let sys_devices_path = Path::new("/sys/devices");
+        jail.mount_bind(sys_devices_path, sys_devices_path, false)
+            .unwrap();
+
+        let crosvm_user_group = CStr::from_bytes_with_nul(b"crosvm\0").unwrap();
+        let crosvm_uid = get_user_id(&crosvm_user_group).unwrap_or_else(|e| {
+            warn!("falling back to current user id for Usb: {:?}", e);
+            geteuid()
+        });
+        let crosvm_gid = get_group_id(&crosvm_user_group).unwrap_or_else(|e| {
+            warn!("falling back to current group id for Usb: {:?}", e);
+            getegid()
+        });
+        jail.change_uid(crosvm_uid);
+        jail.change_gid(crosvm_gid);
+        jail.uidmap(&format!("{0} {0} 1", crosvm_uid))
+            .map_err(Error::SettingUidMap)?;
+        jail.gidmap(&format!("{0} {0} 1", crosvm_gid))
+            .map_err(Error::SettingGidMap)?;
+
+        Some(jail)
+    } else {
+        Some(Minijail::new().unwrap())
+    };
+    pci_devices.push((Box::new(usb_controller), jail));
 
     Ok(pci_devices)
 }

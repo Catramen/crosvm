@@ -1,0 +1,45 @@
+# Copyright 2018 The Chromium OS Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+timerfd_create: 1
+rt_sigprocmask: 1
+recvfrom: 1
+getsockname: 1
+madvise: arg2 == MADV_DONTDUMP || arg2 == MADV_DONTNEED
+pipe: 1
+setsockopt: 1
+bind: 1
+fcntl: 1
+socket: arg0 == AF_NETLINK
+stat: 1
+uname: 1
+write: 1
+getpid: 1
+epoll_wait: 1
+read: 1
+close: 1
+dup: 1
+futex: 1
+# The following ioctls are USBDEVFS_GET_CAPABILITIES, USBDEVFS_GETDRIVER, USBDEVFS_SUBMITURB, USBDEVFS_REAPURBNDELAY.
+ioctl: arg1 == 0x41045508 || arg1 == 0x8004550f || arg1 == 0x4008550d || arg1 == 0x8004551a || arg1 == 0x550b || arg1 == 0x80045510 || arg1 == 0x8038550a
+epoll_create1: 1
+epoll_ctl: 1
+fstat: 1
+poll: 1
+eventfd2: 1
+openat: 1
+sigaltstack: 1
+mmap: arg2 in 0xfffffffb
+mprotect: arg2 in 0xfffffffb
+munmap: 1
+recvmsg: 1
+rt_sigreturn: 1
+sched_getaffinity: 1
+getrandom: 1
+restart_syscall: 1
+exit_group: 1
+set_robust_list: 1
+clone: arg0 & 0x00010000
+exit: 1
+getdents: 1
