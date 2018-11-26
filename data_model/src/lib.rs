@@ -4,7 +4,7 @@
 
 extern crate assertions;
 
-use std::mem::size_of;
+use std::mem::{size_of, uninitialized};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 /// Types for which it is safe to initialize from raw data.
@@ -63,6 +63,27 @@ pub unsafe trait DataInit: Copy + Send + Sync {
         match unsafe { data.align_to_mut::<Self>() } {
             ([], [mid], []) => Some(mid),
             _ => None,
+        }
+    }
+
+    /// Construct `Self` from raw data.
+    ///
+    /// Memory of `Self` is allocated and then raw data is copied from `data`.
+    ///
+    /// This will return `None` if the length of data does not match the size of `Self`.
+    fn copy_from_slice(data: &[u8]) -> Option<Self> {
+        if data.len() == size_of::<Self>() {
+            // Safe because the DataInit trait asserts any data is valid for this type, and we
+            // ensured the size of the pointer's buffer is the correct size. `copy_from_slice`
+            // will not fail, so value will be initialized after copying.
+            let mut value = unsafe { uninitialized::<Self>() };
+            {
+                let value_mem = value.as_mut_slice();
+                value_mem.copy_from_slice(data);
+            }
+            Some(value)
+        } else {
+            None
         }
     }
 
