@@ -53,11 +53,11 @@ use std::fs::OpenOptions;
 use std::os::unix::io::IntoRawFd;
 
 use qcow::QcowFile;
-use sys_util::{getpid, kill_process_group, reap_child, syslog};
+use sys_util::{getpid, kill_process_group, reap_child, syslog, UnlinkUnixDatagram};
 
 use argument::{print_help, set_arguments, Argument};
 use vm_control::{VmRequest, VmResponse, UsbControlCommand, UsbControlResult, MaybeOwnedFd};
-use msg_socket::{Sender, MsgSender, MsgReceiver, MsgSocket};
+use msg_socket::{Sender, MsgSender, MsgReceiver, UnlinkMsgSocket};
 
 static SECCOMP_POLICY_DIR: &'static str = "/usr/share/policy/crosvm";
 
@@ -832,38 +832,46 @@ fn parse_bus_id_addr(str: &str) -> Result<(u8, u8, u16, u16), ()> {
     let pid = u16::from_str_radix(&pid_str, 16).map_err(|_|())?;
     Ok((bus_id, addr, vid, pid))
 }
-fn usb_attach(mut args: std::env::Args) -> std::result::Result<(), ()> {
-    let val = args.nth(0).unwrap();
-    let (bus, addr, vid, pid) = match parse_bus_id_addr(&val) {
-        Err(e) => {
-            error!("failed to parse bus id and addr {:?}", e);
-            return Err(());
-        },
-        Ok((bus_id, addr, vid, pid)) => (bus_id, addr, vid, pid),
+
+macro_rules! log_err {
+    ($($arg:tt)*) => {
+        |e| {
+            error!("error: {:?}. {}", e, format!($($arg)*));
+            ()
+        }
     };
+}
+
+fn usb_attach(mut args: std::env::Args) -> std::result::Result<(), ()> {
+    let val = args.nth(0).ok_or(()).map_err(log_err!("failed to parse args."))?;
+    let (bus, addr, vid, pid) = parse_bus_id_addr(&val).map_err(log_err!("failed to parse args."))?;
     let mut return_result = Ok(());
-    let dev_path = args.nth(0).unwrap();
+    #[cfg(feature = "sandboxed-libusb")]
+    let dev_path = args.nth(0).ok_or(()).map_err(log_err!("failed to parse args."))?;
     for socket_path in args {
         #[cfg(feature = "sandboxed-libusb")]
-        let usb_file = {
-            let file = OpenOptions::new()
+        let usb_file = OpenOptions::new()
                 .read(true)
                 .write(true)
-                .open(&dev_path);
-            match file {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("fail to open device {:?}", e);
-                    return Err(());
-                },
-            }
-        };
-        match UnixDatagram::unbound().and_then(|s| {
+                .open(&dev_path)
+                .map_err(log_err!("fail to open device"))?;
+       match UnixDatagram::unbound().and_then(|s| {
             s.connect(&socket_path)?;
             Ok(s)
         }) {
             Ok(s) => {
-                let sock = MsgSocket::<VmRequest, VmResponse>::new(s);
+                let response_sock = {
+                    let mut buf = PathBuf::new();
+                    buf.push(&socket_path);
+                    buf.pop();
+                    buf.push("crosvm.tmp.sock");
+                    let tmp_socket = buf.as_path();
+                    let s = UnixDatagram::bind(tmp_socket).map_err(log_err!("cannot bind socket"))?;
+                    let s = UnlinkUnixDatagram(s);
+                    UnlinkMsgSocket::<VmRequest, VmResponse>::new(s)
+                };
+
+                let sock = Sender::<VmRequest> ::new(s);
                 if let Err(e) = sock.send(&VmRequest::UsbCommand(UsbControlCommand::AttachDevice {
                     bus, addr, vid, pid,
                     #[cfg(feature = "sandboxed-libusb")]
@@ -874,20 +882,23 @@ fn usb_attach(mut args: std::env::Args) -> std::result::Result<(), ()> {
                            e);
                     continue;
                 };
-                match sock.recv() {
+                match response_sock.recv() {
                     Ok(VmResponse::UsbResponse(UsbControlResult::Ok{port})) => {
-                        info!("usb devices {}:{} connected to guest port {}", bus, addr, port);
+                        println!("ok {}", port);
                     },
                     Ok(VmResponse::UsbResponse(UsbControlResult::NoAvailablePort)) => {
-                        info!("cannot find available port");
+                        println!("no_available_port");
                     },
+                    Ok(VmResponse::UsbResponse(UsbControlResult::FailedToOpenDevice)) => {
+                        println!("fail_to_open_device");
+                    }
                     Err(e) => {
                         error!("failed to get response from socket at at '{}': {:?}",
                                socket_path,
                                e);
                     }
-                    _ => {
-                        error!("unexpected response");
+                    Ok(r) => {
+                        error!("unexpected response {:?}", r);
                     }
                 }
             }
@@ -900,7 +911,7 @@ fn usb_attach(mut args: std::env::Args) -> std::result::Result<(), ()> {
     return_result
 }
 fn usb_detach(mut args: std::env::Args) -> std::result::Result<(), ()> {
-    let port: u8 = match args.nth(0).unwrap().parse::<u8>() {
+    let port: u8 = match args.nth(0).ok_or(()).map_err(log_err!("failed to parse args."))?.parse::<u8>() {
         Ok(n) => n,
         Err(_) => {
             error!("Failed to parse port number");
@@ -914,7 +925,18 @@ fn usb_detach(mut args: std::env::Args) -> std::result::Result<(), ()> {
             Ok(s)
         }) {
             Ok(s) => {
-                let sock = MsgSocket::<VmRequest, VmResponse>::new(s);
+                let response_sock = {
+                    let mut buf = PathBuf::new();
+                    buf.push(&socket_path);
+                    buf.pop();
+                    buf.push("crosvm.tmp.sock");
+                    let tmp_socket = buf.as_path();
+                    let s = UnixDatagram::bind(tmp_socket).map_err(log_err!("cannot bind socket"))?;
+                    let s = UnlinkUnixDatagram(s);
+                    UnlinkMsgSocket::<VmRequest, VmResponse>::new(s)
+                };
+
+                let sock = Sender::<VmRequest> ::new(s);
                 if let Err(e) = sock.send(&VmRequest::UsbCommand(UsbControlCommand::DetachDevice {
                     port
                 })) {
@@ -923,12 +945,12 @@ fn usb_detach(mut args: std::env::Args) -> std::result::Result<(), ()> {
                            e);
                     continue;
                 };
-                match sock.recv() {
+                match response_sock.recv() {
                     Ok(VmResponse::UsbResponse(UsbControlResult::Ok{port})) => {
-                        info!("usb devices detached from port {}", port);
+                        println!("ok {}", port);
                     },
                     Ok(VmResponse::UsbResponse(UsbControlResult::NoSuchDevice)) => {
-                        info!("no device connected at port {}", port);
+                        println!("no_such_device");
                     },
                     Err(e) => {
                         error!("failed to get response from socket at at '{}': {:?}",
@@ -949,7 +971,7 @@ fn usb_detach(mut args: std::env::Args) -> std::result::Result<(), ()> {
     return_result
 }
 fn usb_list(mut args: std::env::Args) -> std::result::Result<(), ()> {
-    let port: u8 = match args.nth(0).unwrap().parse::<u8>() {
+    let port: u8 = match args.nth(0).ok_or(()).map_err(log_err!("failed to parse args."))?.parse::<u8>() {
         Ok(n) => n,
         Err(_) => {
             error!("Failed to parse port number");
@@ -963,7 +985,18 @@ fn usb_list(mut args: std::env::Args) -> std::result::Result<(), ()> {
             Ok(s)
         }) {
             Ok(s) => {
-                let sock = MsgSocket::<VmRequest, VmResponse>::new(s);
+                let response_sock = {
+                    let mut buf = PathBuf::new();
+                    buf.push(&socket_path);
+                    buf.pop();
+                    buf.push("crosvm.tmp.sock");
+                    let tmp_socket = buf.as_path();
+                    let s = UnixDatagram::bind(tmp_socket).map_err(log_err!("cannot bind socket"))?;
+                    let s = UnlinkUnixDatagram(s);
+                    UnlinkMsgSocket::<VmRequest, VmResponse>::new(s)
+                };
+
+                let sock = Sender::<VmRequest> ::new(s);
                 if let Err(e) = sock.send(&VmRequest::UsbCommand(UsbControlCommand::ListDevice {
                     port
                 })) {
@@ -972,12 +1005,12 @@ fn usb_list(mut args: std::env::Args) -> std::result::Result<(), ()> {
                            e);
                     continue;
                 };
-                match sock.recv() {
+                match response_sock.recv() {
                     Ok(VmResponse::UsbResponse(UsbControlResult::Device{port, vid, pid})) => {
-                        info!("usb devices {}:{} is connected to guest port {}", vid, pid, port);
+                        println!("device {} {} {}", port, vid, pid);
                     },
                     Ok(VmResponse::UsbResponse(UsbControlResult::NoSuchDevice)) => {
-                        info!("no device is connected to guest port {}", port);
+                        println!("no_such_device");
                     },
                     Err(e) => {
                         error!("failed to get response from socket at at '{}': {:?}",
@@ -1000,10 +1033,10 @@ fn usb_list(mut args: std::env::Args) -> std::result::Result<(), ()> {
 fn modify_usb(mut args: std::env::Args) -> std::result::Result<(), ()> {
     if args.len() < 3 {
         print_help("crosvm usb",
-                   "[attach bus_id:addr | detach port | list port] VM_SOCKET...", &[]);
+                   "[attach bus_id:addr:bus_num:dev_num | detach port | list port] VM_SOCKET...", &[]);
     }
 
-    let command = args.nth(0).unwrap();
+    let command = args.nth(0).ok_or(()).map_err(log_err!("failed to parse args"))?;
     match command.as_ref() {
         "attach" => {
             usb_attach(args)

@@ -27,7 +27,7 @@ use devices::{self, PciDevice, VirtioPciDevice, XhciController, HostBackendDevic
 use io_jail::{self, Minijail};
 use kvm::*;
 use libcras::CrasClient;
-use msg_socket::{MsgReceiver, MsgSender, MsgSocket, UnlinkMsgSocket};
+use msg_socket::{MsgReceiver, MsgSender, MsgSocket, Sender, UnlinkMsgSocket};
 use net_util::{Error as NetError, Tap};
 use qcow::{self, ImageType, QcowFile};
 use rand_ish::SimpleRng;
@@ -53,6 +53,7 @@ pub enum Error {
     BlockSignal(sys_util::signal::Error),
     BuildingVm(Box<error::Error>),
     CloneEventFd(sys_util::Error),
+    ConnectToSocket,
     CreateEventFd(sys_util::Error),
     CreatePollContext(sys_util::Error),
     CreateSignalFd(sys_util::SignalFdError),
@@ -108,6 +109,7 @@ impl fmt::Display for Error {
             Error::BlockSignal(e) => write!(f, "failed to block signal: {:?}", e),
             Error::BuildingVm(e) => write!(f, "The architecture failed to build the vm: {:?}", e),
             Error::CloneEventFd(e) => write!(f, "failed to clone eventfd: {:?}", e),
+            Error::ConnectToSocket => write!(f, "cannot connect to socket"),
             Error::CreateEventFd(e) => write!(f, "failed to create eventfd: {:?}", e),
             Error::CreatePollContext(e) => write!(f, "failed to create poll context: {:?}", e),
             Error::CreateSignalFd(e) => write!(f, "failed to create signalfd: {:?}", e),
@@ -1211,9 +1213,24 @@ fn run_control(
                                     &mut linux.resources,
                                     &mut run_mode_opt,
                                     &balloon_host_socket,
-                                    &usb_control_socket,
                                     disk_host_sockets,
+                                    &usb_control_socket,
                                 );
+
+                                let response_sock = {
+                                    let mut buf = socket.as_ref()
+                                        .local_addr()
+                                        .map_err(|_| Error::ConnectToSocket)?
+                                        .as_pathname()
+                                        .ok_or(Error::ConnectToSocket)?
+                                        .to_path_buf();
+                                    buf.pop();
+                                    buf.push("crosvm.tmp.sock");
+                                    let tmp_socket = buf.as_path();
+                                    let s = UnixDatagram::unbound().map_err(Error::CreateSocket)?;
+                                    s.connect(tmp_socket).map_err(|_| Error::ConnectToSocket)?;
+                                    Sender::<VmResponse>::new(s)
+                                };
                                 if let Err(e) = socket.send(&response) {
                                     error!("failed to send VmResponse: {:?}", e);
                                 }
