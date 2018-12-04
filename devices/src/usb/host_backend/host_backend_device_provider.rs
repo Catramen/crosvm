@@ -8,6 +8,7 @@ use super::context::Context;
 use super::host_device::HostDevice;
 use msg_socket::{MsgReceiver, MsgSender, MsgSocket};
 use std::mem;
+use std::os::unix::io::IntoRawFd;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixDatagram;
 use std::time::Duration;
@@ -17,7 +18,8 @@ use usb::event_loop::EventHandler;
 use usb::event_loop::EventLoop;
 use usb::xhci::usb_hub::UsbHub;
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
-use vm_control::{UsbControlCommand, UsbControlResult, UsbControlSocket};
+use usb::xhci::xhci_controller::XhciFailHandle;
+use vm_control::{MaybeOwnedFd, UsbControlCommand, UsbControlResult, UsbControlSocket};
 
 const SOCKET_TIMEOUT_MS: u64 = 2000;
 
@@ -139,7 +141,30 @@ impl EventHandler for ProviderInner {
                         return;
                     }
                 };
-                let device_handle = match device.open_fd(fd) {
+                #[cfg(feature = "sandboxed-libusb")]
+                let device_handle = {
+                    let fd = match fd {
+                        MaybeOwnedFd::Borrowed(_) => {
+                            // This should not happen cause AttachDevice is received from sock,
+                            // should always contain a owned fd.
+                            panic!("unknown bug");
+                        }
+                        MaybeOwnedFd::Owned(file) => file.into_raw_fd(),
+                    };
+                    // This is safe only when fd is an fd of the current device.
+                    unsafe {
+                        match device.open_fd(fd) {
+                            Ok(handle) => handle,
+                            Err(e) => {
+                                error!("fail to open device {:?}", e);
+                                self.sock.send(&UsbControlResult::FailedToOpenDevice).unwrap();
+                                return;
+                            }
+                        }
+                    }
+                };
+                #[cfg(not(feature = "sandboxed-libusb"))]
+                let device_handle = match device.open() {
                     Ok(handle) => handle,
                     Err(e) => {
                         error!("fail to open device {:?}", e);
