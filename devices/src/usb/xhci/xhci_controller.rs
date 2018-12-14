@@ -7,14 +7,17 @@ use pci::{
     PciProgrammingInterface, PciSerialBusSubClass,
 };
 use resources::SystemAllocator;
+use std::mem;
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use sys_util::{EventFd, GuestMemory};
 use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
+use usb::xhci::mmio_register::Register;
 use usb::xhci::mmio_space::MMIOSpace;
 use usb::xhci::xhci::Xhci;
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
-use usb::xhci::xhci_regs::init_xhci_mmio_space_and_regs;
+use usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XhciRegs};
 
 const XHCI_BAR0_SIZE: u64 = 0x10000;
 
@@ -29,16 +32,67 @@ impl PciProgrammingInterface for UsbControllerProgrammingInterface {
     }
 }
 
+/// Use this handle to fail xhci controller.
+pub struct XhciFailHandle {
+    usbcmd: Register<u32>,
+    usbsts: Register<u32>,
+    xhci_failed: AtomicBool,
+}
+
+impl XhciFailHandle {
+    pub fn new(regs: &XhciRegs) -> XhciFailHandle {
+        XhciFailHandle {
+            usbcmd: regs.usbcmd.clone(),
+            usbsts: regs.usbsts.clone(),
+            xhci_failed: AtomicBool::new(false),
+        }
+    }
+
+    /// Fail this controller. Will set related registers and flip failed bool.
+    pub fn fail(&self) {
+        // set run/stop to stop.
+        const USBCMD_STOPPED: u32 = 0;
+        // Set host system error bit.
+        const USBSTS_HSE: u32 = 1 << 2;
+        self.usbcmd.set_value(USBCMD_STOPPED);
+        self.usbsts.set_value(USBSTS_HSE);
+
+        self.xhci_failed.store(true, Ordering::SeqCst);
+        error!("xhci controller stopped working");
+    }
+
+    /// Returns true if xhci is already failed.
+    pub fn failed(&self) -> bool {
+        self.xhci_failed.load(Ordering::SeqCst)
+    }
+}
+
+// Xhci controller should be created with backend device provider. Then irq should be assigned
+// before initialized. We are not making `failed` as a state here to optimize performance. Cause we
+// need to set failed in other threads.
+enum XhciControllerState {
+    Unknown,
+    Created {
+        device_provider: HostBackendDeviceProvider,
+    },
+    IrqAssigned {
+        device_provider: HostBackendDeviceProvider,
+        irq_evt: EventFd,
+        irq_resample_evt: EventFd,
+    },
+    Initialized {
+        mmio: MMIOSpace,
+        xhci: Arc<Xhci>,
+        fail_handle: Arc<XhciFailHandle>,
+    },
+}
+
 /// xHCI PCI interface implementation.
 pub struct XhciController {
     config_regs: PciConfiguration,
     mem: GuestMemory,
     bar0: u64, // bar0 in config_regs will be changed by guest. Not sure why.
-    device_provider: Option<HostBackendDeviceProvider>,
-    irq_evt: Option<EventFd>,
-    irq_resample_evt: Option<EventFd>,
-    mmio: Option<MMIOSpace>,
-    xhci: Option<Arc<Xhci>>,
+    state: XhciControllerState,
 }
 
 impl XhciController {
@@ -56,37 +110,55 @@ impl XhciController {
         );
         XhciController {
             config_regs,
-            bar0: 0,
-            device_provider: Some(usb_provider),
-            irq_evt: None,
-            irq_resample_evt: None,
-            mmio: None,
             mem,
-            xhci: None,
+            bar0: 0,
+            state: XhciControllerState::Created {
+                device_provider: usb_provider,
+            },
         }
     }
 
     /// Init xhci controller when it's forked.
     pub fn init_when_forked(&mut self) {
-        if self.mmio.is_some() {
-            error!("xhci controller is already inited");
-            return;
+        match mem::replace(&mut self.state, XhciControllerState::Unknown) {
+            XhciControllerState::IrqAssigned {
+                device_provider,
+                irq_evt,
+                irq_resample_evt,
+            } => {
+                let (mmio, regs) = init_xhci_mmio_space_and_regs();
+                let fail_handle = Arc::new(XhciFailHandle::new(&regs));
+                self.state = XhciControllerState::Initialized {
+                    mmio,
+                    xhci: Xhci::new(
+                        self.mem.clone(),
+                        device_provider,
+                        irq_evt,
+                        irq_resample_evt,
+                        regs,
+                    ),
+                    fail_handle,
+                }
+            }
+            _ => {
+                error!("xhci controller is in a wrong state");
+                panic!();
+            }
         }
-        let (mmio, regs) = init_xhci_mmio_space_and_regs();
-        self.mmio = Some(mmio);
-        self.xhci = Some(Xhci::new(
-            self.mem.clone(),
-            self.device_provider.take().unwrap(),
-            self.irq_evt.take().unwrap(),
-            self.irq_resample_evt.take().unwrap(),
-            regs,
-        ));
     }
 }
 
 impl PciDevice for XhciController {
     fn keep_fds(&self) -> Vec<RawFd> {
-        self.device_provider.as_ref().unwrap().keep_fds()
+        match self.state {
+            XhciControllerState::Created {
+                ref device_provider,
+            } => device_provider.keep_fds(),
+            _ => {
+                error!("xhci controller is in a wrong state");
+                panic!();
+            }
+        }
     }
 
     fn assign_irq(
@@ -96,9 +168,20 @@ impl PciDevice for XhciController {
         irq_num: u32,
         irq_pin: PciInterruptPin,
     ) {
-        self.config_regs.set_irq(irq_num as u8, irq_pin);
-        self.irq_evt = Some(irq_evt);
-        self.irq_resample_evt = Some(irq_resample_evt);
+        match mem::replace(&mut self.state, XhciControllerState::Unknown) {
+            XhciControllerState::Created { device_provider } => {
+                self.config_regs.set_irq(irq_num as u8, irq_pin);
+                self.state = XhciControllerState::IrqAssigned {
+                    device_provider,
+                    irq_evt,
+                    irq_resample_evt,
+                }
+            }
+            _ => {
+                error!("xhci controller is in a wrong state");
+                panic!();
+            }
+        }
     }
 
     fn allocate_io_bars(
@@ -129,7 +212,20 @@ impl PciDevice for XhciController {
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
-        self.mmio.as_ref().unwrap().read_bar(addr - bar0, data);
+        match self.state {
+            XhciControllerState::Initialized {
+                ref mmio,
+                xhci: _,
+                fail_handle: _,
+            } => {
+                // Read bar would still work even if it's already failed.
+                mmio.read_bar(addr - bar0, data);
+            }
+            _ => {
+                error!("xhci controller is in a wrong state");
+                panic!();
+            }
+        }
     }
 
     fn write_bar(&mut self, addr: u64, data: &[u8]) {
@@ -137,7 +233,21 @@ impl PciDevice for XhciController {
         if addr < bar0 || addr > bar0 + XHCI_BAR0_SIZE {
             return;
         }
-        self.mmio.as_ref().unwrap().write_bar(addr - bar0, data);
+        match self.state {
+            XhciControllerState::Initialized {
+                ref mmio,
+                xhci: _,
+                ref fail_handle,
+            } => {
+                if !fail_handle.failed() {
+                    mmio.write_bar(addr - bar0, data);
+                }
+            }
+            _ => {
+                error!("xhci controller is in a wrong state");
+                panic!();
+            }
+        }
     }
     fn on_device_sandboxed(&mut self) {
         self.init_when_forked();
