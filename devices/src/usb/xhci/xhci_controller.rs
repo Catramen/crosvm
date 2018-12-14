@@ -82,7 +82,8 @@ enum XhciControllerState {
     },
     Initialized {
         mmio: MMIOSpace,
-        xhci: Arc<Xhci>,
+        // Xhci init could fail.
+        xhci: Option<Arc<Xhci>>,
         fail_handle: Arc<XhciFailHandle>,
     },
 }
@@ -128,15 +129,19 @@ impl XhciController {
             } => {
                 let (mmio, regs) = init_xhci_mmio_space_and_regs();
                 let fail_handle = Arc::new(XhciFailHandle::new(&regs));
+                let xhci = match Xhci::new(fail_handle.clone(),
+                self.mem.clone(), device_provider, irq_evt, irq_resample_evt, regs,) {
+                    Ok(xhci) => Some(xhci),
+                    Err(_) => {
+                        error!("fail to init xhci");
+                        fail_handle.fail();
+                        return;
+                    },
+                };
+
                 self.state = XhciControllerState::Initialized {
                     mmio,
-                    xhci: Xhci::new(
-                        self.mem.clone(),
-                        device_provider,
-                        irq_evt,
-                        irq_resample_evt,
-                        regs,
-                    ),
+                    xhci,
                     fail_handle,
                 }
             }

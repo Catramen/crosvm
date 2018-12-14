@@ -14,9 +14,12 @@ use usb::xhci::intr_resample_handler::IntrResampleHandler;
 use usb::xhci::usb_hub::UsbHub;
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 use usb::xhci::xhci_regs::*;
+use usb::xhci::xhci_controller::XhciFailHandle;
+use usb::error::{Error, Result};
 
 /// xHCI controller implementation.
 pub struct Xhci {
+    fail_handle: Arc<XhciFailHandle>,
     regs: XhciRegs,
     interrupter: Arc<Mutex<Interrupter>>,
     command_ring_controller: Arc<CommandRingController>,
@@ -33,16 +36,17 @@ pub struct Xhci {
 impl Xhci {
     /// Create a new xHCI controller.
     pub fn new(
+        fail_handle: Arc<XhciFailHandle>,
         mem: GuestMemory,
         device_provider: HostBackendDeviceProvider,
         irq_evt: EventFd,
         irq_resample_evt: EventFd,
         regs: XhciRegs,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>> {
         let (event_loop, _join_handle) = EventLoop::start();
         let interrupter = Arc::new(Mutex::new(Interrupter::new(
             mem.clone(),
-            irq_evt.try_clone().unwrap(),
+            irq_evt.try_clone().map_err(err_msg!(Error::SysError))?,
             &regs,
         )));
         let event_loop = Arc::new(event_loop);
@@ -67,6 +71,7 @@ impl Xhci {
             interrupter.clone(),
         );
         let xhci = Arc::new(Xhci {
+            fail_handle,
             regs,
             intr_resample_handler,
             interrupter,
@@ -75,75 +80,108 @@ impl Xhci {
             device_provider,
         });
         Self::init_reg_callbacks(&xhci);
-        xhci
+        Ok(xhci)
     }
 
     fn init_reg_callbacks(xhci: &Arc<Xhci>) {
+        // All the callbacks will hold a weak reference to avoid memory leak. Thos weak upgrade
+        // should never fail.
         let xhci_weak = Arc::downgrade(xhci);
         xhci.regs
             .usbcmd
-            .set_write_cb(move |val: u32| xhci_weak.upgrade().unwrap().usbcmd_callback(val));
+            .set_write_cb(move |val: u32| {
+                let xhci = xhci_weak.upgrade().unwrap();
+                let r = xhci.usbcmd_callback(val);
+                xhci.handle_register_callback_result(r, 0)
+            }
+            );
 
         let xhci_weak = Arc::downgrade(xhci);
         xhci.regs
             .crcr
-            .set_write_cb(move |val: u64| xhci_weak.upgrade().unwrap().crcr_callback(val));
+            .set_write_cb(move |val: u64| {
+                let xhci = xhci_weak.upgrade().unwrap();
+                let r = xhci.crcr_callback(val);
+                xhci.handle_register_callback_result(r, 0)
+            }
+            );
 
         for i in 0..xhci.regs.portsc.len() {
             let xhci_weak = Arc::downgrade(xhci);
             xhci.regs.portsc[i].set_write_cb(move |val: u32| {
-                xhci_weak.upgrade().unwrap().portsc_callback(i as u32, val)
+                let xhci = xhci_weak.upgrade().unwrap();
+                let r = xhci.portsc_callback(i as u32, val);
+                xhci.handle_register_callback_result(r, 0)
             });
         }
 
         for i in 0..xhci.regs.doorbells.len() {
             let xhci_weak = Arc::downgrade(xhci);
             xhci.regs.doorbells[i].set_write_cb(move |val: u32| {
-                xhci_weak
-                    .upgrade()
-                    .unwrap()
-                    .doorbell_callback(i as u32, val);
+                let xhci = xhci_weak.upgrade().unwrap();
+                let r = xhci.doorbell_callback(i as u32, val);
+                xhci.handle_register_callback_result(r, ());
                 val
             });
         }
 
         let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.iman.set_write_cb(move |val: u32| {
-            xhci_weak.upgrade().unwrap().iman_callback(val);
+            let xhci = xhci_weak.upgrade().unwrap();
+            let r = xhci.iman_callback(val);
+            xhci.handle_register_callback_result(r, ());
             val
         });
 
         let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.imod.set_write_cb(move |val: u32| {
-            xhci_weak.upgrade().unwrap().imod_callback(val);
+            let xhci = xhci_weak.upgrade().unwrap();
+            let r = xhci.imod_callback(val);
+            xhci.handle_register_callback_result(r, ());
             val
         });
 
         let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.erstsz.set_write_cb(move |val: u32| {
-            xhci_weak.upgrade().unwrap().erstsz_callback(val);
+            let xhci = xhci_weak.upgrade().unwrap();
+            let r = xhci.erstsz_callback(val);
+            xhci.handle_register_callback_result(r, ());
             val
         });
 
         let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.erstba.set_write_cb(move |val: u64| {
-            xhci_weak.upgrade().unwrap().erstba_callback(val);
+            let xhci = xhci_weak.upgrade().unwrap();
+            let r = xhci.erstba_callback(val);
+            xhci.handle_register_callback_result(r, ());
             val
         });
 
         let xhci_weak = Arc::downgrade(xhci);
         xhci.regs.erdp.set_write_cb(move |val: u64| {
-            xhci_weak.upgrade().unwrap().erdp_callback(val);
+            let xhci = xhci_weak.upgrade().unwrap();
+            let r = xhci.erdp_callback(val);
+            xhci.handle_register_callback_result(r, ());
             val
         });
     }
 
+    fn handle_register_callback_result<T>(&self, r: Result<T>, t: T ) -> T {
+        match r {
+            Ok(v) => v,
+            Err(_) => {
+                self.fail_handle.fail();
+                t
+            }
+        }
+    }
+
     // Callback for usbcmd register write.
-    fn usbcmd_callback(&self, value: u32) -> u32 {
+    fn usbcmd_callback(&self, value: u32) -> Result<u32> {
         if (value & USB_CMD_RESET) > 0 {
             debug!("xhci_controller: reset controller");
-            self.reset();
-            return value & (!USB_CMD_RESET);
+            self.reset()?;
+            return Ok(value & (!USB_CMD_RESET));
         }
 
         if (value & USB_CMD_RUNSTOP) > 0 {
@@ -151,7 +189,7 @@ impl Xhci {
             self.regs.usbsts.clear_bits(USB_STS_HALTED);
         } else {
             debug!("xhci_controller: halt device");
-            self.halt();
+            self.halt()?;
             self.regs.crcr.clear_bits(CRCR_COMMAND_RING_RUNNING);
         }
 
@@ -159,14 +197,14 @@ impl Xhci {
         let enabled = (value & USB_CMD_INTERRUPTER_ENABLE) > 0
             && (self.regs.iman.get_value() & IMAN_INTERRUPT_ENABLE) > 0;
         debug!("xhci_controller: interrupter enable?: {}", enabled);
-        self.interrupter.lock().unwrap().set_enabled(enabled);
-        value
+        self.interrupter.lock().map_err(err_msg!(Error::Unknown))?.set_enabled(enabled);
+        Ok(value)
     }
 
     // Callback for crcr register write.
-    fn crcr_callback(&self, value: u64) -> u64 {
+    fn crcr_callback(&self, value: u64) -> Result<u64> {
         debug!("xhci_controller: write to crcr {:x}", value);
-        if (self.regs.crcr.get_value() & CRCR_COMMAND_RING_RUNNING) == 0 {
+        let value = if (self.regs.crcr.get_value() & CRCR_COMMAND_RING_RUNNING) == 0 {
             self.command_ring_controller
                 .set_dequeue_pointer(GuestAddress(value & CRCR_COMMAND_RING_POINTER));
             self.command_ring_controller
@@ -175,11 +213,12 @@ impl Xhci {
         } else {
             error!("Write to crcr while command ring is running");
             self.regs.crcr.get_value()
-        }
+        };
+        Ok(value)
     }
 
     // Callback for portsc register write.
-    fn portsc_callback(&self, index: u32, value: u32) -> u32 {
+    fn portsc_callback(&self, index: u32, value: u32) -> Result<u32> {
         let mut value = value;
         debug!(
             "xhci_controller: write to portsc index {} value {:x}",
@@ -195,14 +234,14 @@ impl Xhci {
             value |= PORTSC_PORT_RESET_CHANGE;
             self.interrupter
                 .lock()
-                .unwrap()
+                .map_err(err_msg!(Error::Unknown))?
                 .send_port_status_change_trb((index + 1) as u8);
         }
-        value
+        Ok(value)
     }
 
     // Callback for doorbell register write.
-    fn doorbell_callback(&self, index: u32, value: u32) {
+    fn doorbell_callback(&self, index: u32, value: u32) -> Result<()> {
         debug!(
             "xhci_controller: write to doorbell index {} value {:x}",
             index, value
@@ -213,7 +252,7 @@ impl Xhci {
             // First doorbell is for command ring.
             if index == 0 {
                 if target != 0 || stream_id != 0 {
-                    return;
+                    return Ok(());
                 }
                 debug!("doorbell to command ring");
                 self.regs.crcr.set_bits(CRCR_COMMAND_RING_RUNNING);
@@ -222,73 +261,82 @@ impl Xhci {
                 debug!("doorbell to device slot");
                 self.device_slots
                     .slot(index as u8)
-                    .unwrap()
+                    .ok_or(Error::BadState)
+                    .map_err(err_msg!("invalid device slot"))?
                     .ring_doorbell(target, stream_id);
             }
         }
+        Ok(())
     }
 
     // Callback for iman register write.
-    fn iman_callback(&self, value: u32) {
+    fn iman_callback(&self, value: u32) -> Result<()> {
         debug!("xhci_controller: write to iman {:x}", value);
         let enabled = ((value & IMAN_INTERRUPT_ENABLE) > 0)
             && ((self.regs.usbcmd.get_value() & USB_CMD_INTERRUPTER_ENABLE) > 0);
-        self.interrupter.lock().unwrap().set_enabled(enabled);
+        self.interrupter.lock().map_err(err_msg!(Error::Unknown))?.set_enabled(enabled);
+        Ok(())
     }
 
     // Callback for imod register write.
-    fn imod_callback(&self, value: u32) {
+    fn imod_callback(&self, value: u32) -> Result<()> {
         debug!("xhci_controller: write to imod {:x}", value);
-        self.interrupter.lock().unwrap().set_moderation(
+        self.interrupter.lock().map_err(err_msg!(Error::Unknown))?.set_moderation(
             (value & IMOD_INTERRUPT_MODERATION_INTERVAL) as u16,
             (value >> IMOD_INTERRUPT_MODERATION_COUNTER_OFFSET) as u16,
         );
+        Ok(())
     }
 
     // Callback for erstsz register write.
-    fn erstsz_callback(&self, value: u32) {
+    fn erstsz_callback(&self, value: u32) -> Result<()> {
         debug!("xhci_controller: write to erstz {:x}", value);
         self.interrupter
             .lock()
-            .unwrap()
+            .map_err(err_msg!(Error::Unknown))?
             .set_event_ring_seg_table_size((value & ERSTSZ_SEGMENT_TABLE_SIZE) as u16);
+        Ok(())
     }
 
     // Callback for erstba register write.
-    fn erstba_callback(&self, value: u64) {
+    fn erstba_callback(&self, value: u64) -> Result<()> {
         debug!("xhci_controller: write to erstba {:x}", value);
         self.interrupter
             .lock()
-            .unwrap()
+            .map_err(err_msg!(Error::Unknown))?
             .set_event_ring_seg_table_base_addr(GuestAddress(
                 value & ERSTBA_SEGMENT_TABLE_BASE_ADDRESS,
             ));
+        Ok(())
     }
 
     // Callback for erdp register write.
-    fn erdp_callback(&self, value: u64) {
+    fn erdp_callback(&self, value: u64) -> Result<()> {
         debug!("xhci_controller: write to erdp {:x}", value);
         {
-            let mut interrupter = self.interrupter.lock().unwrap();
+            let mut interrupter = self.interrupter.lock().map_err(err_msg!(Error::Unknown))?;
             interrupter.set_event_ring_dequeue_pointer(GuestAddress(
                 value & ERDP_EVENT_RING_DEQUEUE_POINTER,
             ));
             interrupter.set_event_handler_busy((value & ERDP_EVENT_HANDLER_BUSY) > 0);
         }
+        Ok(())
     }
 
-    fn reset(&self) {
+    fn reset(&self) -> Result<()> {
         self.regs.usbsts.set_bits(USB_STS_CONTROLLER_NOT_READY);
         let usbsts = self.regs.usbsts.clone();
         self.device_slots.stop_all_and_reset(move || {
             usbsts.clear_bits(USB_STS_CONTROLLER_NOT_READY);
         });
+        Ok(())
     }
 
-    fn halt(&self) {
+    fn halt(&self) -> Result<()>{
         let usbsts = self.regs.usbsts.clone();
         self.device_slots.stop_all(AutoCallback::new(move || {
             usbsts.set_bits(USB_STS_HALTED);
         }));
+        Ok(())
     }
 }
