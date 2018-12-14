@@ -37,16 +37,6 @@ pub struct EventLoop {
     stop_evt: EventFd,
 }
 
-impl Clone for EventLoop {
-    fn clone(&self) -> EventLoop {
-        EventLoop {
-            poll_ctx: self.poll_ctx.clone(),
-            handlers: self.handlers.clone(),
-            stop_evt: self.stop_evt.try_clone().unwrap(),
-        }
-    }
-}
-
 /// Interface for event handler.
 pub trait EventHandler: Send + Sync {
     fn on_event(&self, fd: RawFd);
