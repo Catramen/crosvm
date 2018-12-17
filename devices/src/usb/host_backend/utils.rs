@@ -3,9 +3,11 @@
 // found in the LICENSE file.
 
 use std::mem;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use sync::Mutex;
 
 use usb::async_job_queue::AsyncJobQueue;
+use usb::error::{Error, Result};
 use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferState};
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{TransferStatus, UsbTransfer, UsbTransferBuffer};
@@ -13,13 +15,13 @@ use usb_util::usb_transfer::{TransferStatus, UsbTransfer, UsbTransferBuffer};
 pub fn update_state<T: UsbTransferBuffer>(
     xhci_transfer: &Arc<XhciTransfer>,
     usb_transfer: &UsbTransfer<T>,
-) {
+) -> Result<()> {
     let status = usb_transfer.status();
-    let mut state = xhci_transfer.state().lock().unwrap();
+    let mut state = xhci_transfer.state().lock();
 
     if status == TransferStatus::Cancelled {
         *state = XhciTransferState::Cancelled;
-        return;
+        return Ok(());
     }
 
     match *state {
@@ -31,10 +33,11 @@ pub fn update_state<T: UsbTransferBuffer>(
         }
         _ => {
             error!("tansfer is in an wrong state");
-            // We consider this completed to avoid guest kernel panic.
             *state = XhciTransferState::Completed;
+            return Err(Error::Unknown);
         }
     }
+    Ok(())
 }
 /// Helper function to submit usb_transfer to device handle.
 pub fn submit_transfer<T: UsbTransferBuffer>(
@@ -42,12 +45,12 @@ pub fn submit_transfer<T: UsbTransferBuffer>(
     xhci_transfer: Arc<XhciTransfer>,
     device_handle: &Arc<Mutex<DeviceHandle>>,
     usb_transfer: UsbTransfer<T>,
-) {
+) -> Result<()> {
     let transfer_status = {
         // We need to hold the lock to avoid race condition.
         // While we are trying to submit the transfer, another thread might want to cancel the same
         // transfer. Holding the lock here makes sure one of them is cancelled.
-        let mut state = xhci_transfer.state().lock().unwrap();
+        let mut state = xhci_transfer.state().lock();
         match mem::replace(&mut *state, XhciTransferState::Cancelled) {
             XhciTransferState::Created => {
                 let canceller = usb_transfer.get_canceller();
@@ -57,18 +60,14 @@ pub fn submit_transfer<T: UsbTransferBuffer>(
                     false => debug!("fail to cancel"),
                 });
                 *state = XhciTransferState::Submitted { cancel_callback };
-                match device_handle
-                    .lock()
-                    .unwrap()
-                    .submit_async_transfer(usb_transfer)
-                {
+                match device_handle.lock().submit_async_transfer(usb_transfer) {
                     Err(e) => {
                         error!("fail to submit transfer {:?}", e);
                         *state = XhciTransferState::Completed;
                         TransferStatus::NoDevice
                     }
                     // If it's submitted, we don't need to send on_transfer_complete now.
-                    Ok(_) => return,
+                    Ok(_) => return Ok(()),
                 }
             }
             XhciTransferState::Cancelled => {
@@ -81,13 +80,16 @@ pub fn submit_transfer<T: UsbTransferBuffer>(
                 // Cancelling: Transfer is cancelling only when it's submitted and someone is
                 // trying to cancel it.
                 // Completed: A completed transfer should not be submitted again.
-                panic!("there is a bug");
+                error!("there is an unknown bug");
+                return Err(Error::Unknown);
             }
         }
     };
     // We are holding locks to of backends, we want to call on_transfer_complete
     // without any lock.
     job_queue.queue_job(move || {
-        xhci_transfer.on_transfer_complete(&transfer_status, 0);
-    });
+        xhci_transfer
+            .on_transfer_complete(&transfer_status, 0)
+            .unwrap();
+    })
 }

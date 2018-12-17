@@ -12,6 +12,7 @@ use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use sys_util::{EventFd, GuestMemory};
+use usb::event_loop::FailHandle;
 use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 use usb::xhci::mmio_register::Register;
 use usb::xhci::mmio_space::MMIOSpace;
@@ -47,9 +48,11 @@ impl XhciFailHandle {
             xhci_failed: AtomicBool::new(false),
         }
     }
+}
 
+impl FailHandle for XhciFailHandle {
     /// Fail this controller. Will set related registers and flip failed bool.
-    pub fn fail(&self) {
+    fn fail(&self) {
         // set run/stop to stop.
         const USBCMD_STOPPED: u32 = 0;
         // Set host system error bit.
@@ -62,7 +65,7 @@ impl XhciFailHandle {
     }
 
     /// Returns true if xhci is already failed.
-    pub fn failed(&self) -> bool {
+    fn failed(&self) -> bool {
         self.xhci_failed.load(Ordering::SeqCst)
     }
 }
@@ -129,14 +132,20 @@ impl XhciController {
             } => {
                 let (mmio, regs) = init_xhci_mmio_space_and_regs();
                 let fail_handle = Arc::new(XhciFailHandle::new(&regs));
-                let xhci = match Xhci::new(fail_handle.clone(),
-                self.mem.clone(), device_provider, irq_evt, irq_resample_evt, regs,) {
+                let xhci = match Xhci::new(
+                    fail_handle.clone(),
+                    self.mem.clone(),
+                    device_provider,
+                    irq_evt,
+                    irq_resample_evt,
+                    regs,
+                ) {
                     Ok(xhci) => Some(xhci),
                     Err(_) => {
                         error!("fail to init xhci");
                         fail_handle.fail();
                         return;
-                    },
+                    }
                 };
 
                 self.state = XhciControllerState::Initialized {

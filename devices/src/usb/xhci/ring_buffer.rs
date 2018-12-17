@@ -4,6 +4,7 @@
 
 use std::mem::size_of;
 use sys_util::{GuestAddress, GuestMemory};
+use usb::error::{Error, Result};
 use usb::xhci::xhci_abi::TransferDescriptor;
 
 use super::xhci_abi::*;
@@ -34,16 +35,16 @@ impl RingBuffer {
     }
 
     /// Dequeue next transfer descriptor from the transfer ring.
-    pub fn dequeue_transfer_descriptor(&mut self) -> Option<TransferDescriptor> {
+    pub fn dequeue_transfer_descriptor(&mut self) -> Result<Option<TransferDescriptor>> {
         let mut td: TransferDescriptor = TransferDescriptor::new();
         loop {
-            let addressed_trb = match self.get_current_trb() {
+            let addressed_trb = match self.get_current_trb()? {
                 Some(t) => t,
                 None => break,
             };
 
             if addressed_trb.trb.trb_type() == Some(TrbType::Link) {
-                let link_trb = addressed_trb.trb.cast::<LinkTrb>();
+                let link_trb = addressed_trb.trb.cast::<LinkTrb>()?;
                 self.dequeue_pointer = GuestAddress(link_trb.get_ring_segment_pointer());
                 self.consumer_cycle_state =
                     self.consumer_cycle_state != link_trb.get_toggle_cycle_bit();
@@ -52,9 +53,12 @@ impl RingBuffer {
 
             self.dequeue_pointer = match self.dequeue_pointer.checked_add(size_of::<Trb>() as u64) {
                 Some(addr) => addr,
-                None => panic!(
-                    "dequeue pointer overflow, this is likely caused by invalid memory access"
-                ),
+                None => {
+                    error!(
+                        "dequeue pointer overflow, this is likely caused by invalid memory access"
+                    );
+                    return Err(Error::BadState);
+                }
             };
 
             debug!(
@@ -63,18 +67,23 @@ impl RingBuffer {
                 &addressed_trb.trb.debug_str()
             );
             td.push(addressed_trb);
-            if !addressed_trb.trb.get_chain_bit() {
+            if !addressed_trb.trb.get_chain_bit()? {
                 debug!("trb chain is false returning");
                 break;
             }
         }
         // A valid transfer descriptor contains at least one addressed trb and the last trb has
         // chain bit != 0.
-        if td.last()?.trb.get_chain_bit() {
-            None
-        } else {
-            Some(td)
+        {
+            match td.last() {
+                Some(t) => {
+                    if t.trb.get_chain_bit()? {
+                        return Ok(None)
+                    }},
+                None => return Ok(None),
+            }
         }
+        Ok(Some(td))
     }
 
     /// Set dequeue pointer of the ring buffer.
@@ -91,22 +100,21 @@ impl RingBuffer {
     }
 
     // Read trb pointed by dequeue pointer. Does not proceed dequeue pointer.
-    fn get_current_trb(&self) -> Option<AddressedTrb> {
-        // TODO(jkwang) elegantly shut down xhci instead of panic.
+    fn get_current_trb(&self) -> Result<Option<AddressedTrb>> {
         let trb: Trb = self
             .mem
             .read_obj_from_addr(self.dequeue_pointer)
-            .expect("fail to read from dequeue pointer");
+            .map_err(err_msg!(Error::BadState))?;
         debug!("{}: trb read from memory {:?}", self.name.as_str(), trb);
         // If cycle bit of trb does not equal consumer cycle state, the ring is empty.
         // This trb is invalid.
         if trb.get_cycle_bit() != self.consumer_cycle_state {
-            None
+            Ok(None)
         } else {
-            Some(AddressedTrb {
+            Ok(Some(AddressedTrb {
                 trb,
                 gpa: self.dequeue_pointer.0,
-            })
+            }))
         }
     }
 }
@@ -174,7 +182,10 @@ mod test {
         transfer_ring.set_consumer_cycle_state(false);
 
         // Read first transfer descriptor.
-        let descriptor = transfer_ring.dequeue_transfer_descriptor().unwrap();
+        let descriptor = transfer_ring
+            .dequeue_transfer_descriptor()
+            .unwrap()
+            .unwrap();
         assert_eq!(descriptor.len(), 4);
         assert_eq!(descriptor[0].trb.get_parameter(), 1);
         assert_eq!(descriptor[1].trb.get_parameter(), 2);
@@ -182,7 +193,10 @@ mod test {
         assert_eq!(descriptor[3].trb.get_parameter(), 4);
 
         // Read second transfer descriptor.
-        let descriptor = transfer_ring.dequeue_transfer_descriptor().unwrap();
+        let descriptor = transfer_ring
+            .dequeue_transfer_descriptor()
+            .unwrap()
+            .unwrap();
         assert_eq!(descriptor.len(), 2);
         assert_eq!(descriptor[0].trb.get_parameter(), 5);
         assert_eq!(descriptor[1].trb.get_parameter(), 6);
@@ -219,7 +233,7 @@ mod test {
         transfer_ring.set_consumer_cycle_state(false);
 
         // Read first transfer descriptor.
-        let descriptor = transfer_ring.dequeue_transfer_descriptor();
+        let descriptor = transfer_ring.dequeue_transfer_descriptor().unwrap();
         assert_eq!(descriptor.is_none(), true);
     }
 

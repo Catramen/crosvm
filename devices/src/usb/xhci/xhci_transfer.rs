@@ -13,8 +13,10 @@ use super::xhci_regs::MAX_INTERRUPTER;
 use std::cmp::min;
 use std::fmt;
 use std::mem;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
+use sync::Mutex;
 use sys_util::{EventFd, GuestMemory};
+use usb::error::{Error, Result};
 use usb_util::types::UsbRequestSetup;
 use usb_util::usb_transfer::TransferStatus;
 
@@ -76,43 +78,41 @@ pub enum XhciTransferType {
 }
 
 impl XhciTransferType {
-    /// Analyze transfer descriptor and return transfer type. This function will panic if td is
-    /// empty.
-    pub fn new(mem: GuestMemory, td: TransferDescriptor) -> XhciTransferType {
+    /// Analyze transfer descriptor and return transfer type.
+    pub fn new(mem: GuestMemory, td: TransferDescriptor) -> Result<XhciTransferType> {
         // We can figure out transfer type from the first trb.
         // See transfer descriptor description in xhci spec for more details.
-        // TODO(jkwang) shut down xhci controller instead of panic.
-        match td[0].trb.trb_type().unwrap() {
+        match td[0]
+            .trb
+            .trb_type()
+            .ok_or(Error::BadState)
+            .map_err(err_msg!())?
+        {
             TrbType::Normal => {
-                let buffer = ScatterGatherBuffer::new(mem, td);
-                XhciTransferType::Normal(buffer)
+                let buffer = ScatterGatherBuffer::new(mem, td)?;
+                Ok(XhciTransferType::Normal(buffer))
             }
             TrbType::SetupStage => {
-                let trb = td[0].trb.cast::<SetupStageTrb>();
-                XhciTransferType::SetupStage(UsbRequestSetup::new(
+                let trb = td[0].trb.cast::<SetupStageTrb>()?;
+                Ok(XhciTransferType::SetupStage(UsbRequestSetup::new(
                     trb.get_request_type(),
                     trb.get_request(),
                     trb.get_value(),
                     trb.get_index(),
                     trb.get_length(),
-                ))
+                )))
             }
             TrbType::DataStage => {
-                let buffer = ScatterGatherBuffer::new(mem, td);
-                XhciTransferType::DataStage(buffer)
+                let buffer = ScatterGatherBuffer::new(mem, td)?;
+                Ok(XhciTransferType::DataStage(buffer))
             }
-            TrbType::StatusStage => XhciTransferType::StatusStage,
+            TrbType::StatusStage => Ok(XhciTransferType::StatusStage),
             TrbType::Isoch => {
-                let buffer = ScatterGatherBuffer::new(mem, td);
-                XhciTransferType::Isochronous(buffer)
+                let buffer = ScatterGatherBuffer::new(mem, td)?;
+                Ok(XhciTransferType::Isochronous(buffer))
             }
-            TrbType::Noop => XhciTransferType::Noop,
-            _ => {
-                // TODO(jkwang) refactor this code to handle invalid trb type:
-                // 1. Return the error to caller.
-                // 2. Return invalid trb to guest kernel.
-                panic!("Wrong trb type in transfer ring");
-            }
+            TrbType::Noop => Ok(XhciTransferType::Noop),
+            _ => Err(Error::BadState),
         }
     }
 }
@@ -132,8 +132,7 @@ impl XhciTransferManager {
         }
     }
 
-    /// Build a new XhciTransfer. Endpoint id is the id in xHCI device slot. It will panic if
-    /// transfer_trbs is emptry.
+    /// Build a new XhciTransfer. Endpoint id is the id in xHCI device slot.
     pub fn create_transfer(
         &self,
         mem: GuestMemory,
@@ -166,16 +165,13 @@ impl XhciTransferManager {
             transfer_dir,
             transfer_trbs,
         };
-        self.transfers
-            .lock()
-            .unwrap()
-            .push(Arc::downgrade(&t.state));
+        self.transfers.lock().push(Arc::downgrade(&t.state));
         t
     }
 
     /// Cancel all current transfers.
     pub fn cancel_all(&self) {
-        self.transfers.lock().unwrap().iter().for_each(|t| {
+        self.transfers.lock().iter().for_each(|t| {
             let state = match t.upgrade() {
                 Some(state) => state,
                 None => {
@@ -183,12 +179,12 @@ impl XhciTransferManager {
                     return;
                 }
             };
-            state.lock().unwrap().try_cancel();
+            state.lock().try_cancel();
         });
     }
 
     fn remove_transfer(&self, t: &Arc<Mutex<XhciTransferState>>) {
-        let mut transfers = self.transfers.lock().unwrap();
+        let mut transfers = self.transfers.lock();
         match transfers.iter().position(|wt| match wt.upgrade() {
             Some(wt) => Arc::ptr_eq(&wt, t),
             None => false,
@@ -240,7 +236,7 @@ impl XhciTransfer {
     }
 
     /// Get transfer type.
-    pub fn get_transfer_type(&self) -> XhciTransferType {
+    pub fn get_transfer_type(&self) -> Result<XhciTransferType> {
         XhciTransferType::new(self.mem.clone(), self.transfer_trbs.clone())
     }
 
@@ -256,30 +252,39 @@ impl XhciTransfer {
     }
 
     /// This functions should be invoked when transfer is completed (or failed).
-    pub fn on_transfer_complete(&self, status: &TransferStatus, bytes_transferred: u32) {
+    pub fn on_transfer_complete(
+        &self,
+        status: &TransferStatus,
+        bytes_transferred: u32,
+    ) -> Result<()> {
         match status {
             TransferStatus::NoDevice => {
                 debug!("device disconnected, detaching from port");
-                self.port.detach();
                 // If the device is gone, we don't need to send transfer completion event, cause we
                 // are going to destroy everything related to this device anyway.
-                return;
+                self.port.detach()?;
+                return Ok(());
             }
             TransferStatus::Cancelled => {
                 // TODO(jkwang) According to the spec, we should send a stopped event here. But kernel driver
                 // does not do anything meaningful when it sees a stopped event.
-                // TODO(jkwang) stop xhci controller instead of unwrap.
-                self.transfer_completion_event.write(1).unwrap();
-                return;
+                return self
+                    .transfer_completion_event
+                    .write(1)
+                    .map_err(err_msg!(Error::SysError));
             }
             TransferStatus::Completed => {
-                self.transfer_completion_event.write(1).unwrap();
+                self.transfer_completion_event
+                    .write(1)
+                    .map_err(err_msg!(Error::SysError))?;
             }
             _ => {
                 // Transfer failed, we are not handling this correctly yet. Guest kernel might see
                 // short packets for in transfer and might think control transfer is successful. It
                 // will eventually find out device is in a wrong state.
-                self.transfer_completion_event.write(1).unwrap();
+                self.transfer_completion_event
+                    .write(1)
+                    .map_err(err_msg!(Error::SysError))?;
             }
         }
 
@@ -292,88 +297,106 @@ impl XhciTransfer {
         //      Interrupter-on-Short Packet flag is set.
         //   3. If an error occurs during the execution of a Transfer Trb.
         for atrb in &self.transfer_trbs {
-            edtla += atrb.trb.transfer_length();
+            edtla += atrb.trb.transfer_length()?;
             if atrb.trb.interrupt_on_completion() {
                 // For details about event data trb and EDTLA, see spec 4.11.5.2.
-                if atrb.trb.trb_type().unwrap() == TrbType::EventData {
+                if atrb
+                    .trb
+                    .trb_type()
+                    .ok_or(Error::BadState)
+                    .map_err(err_msg!())? == TrbType::EventData
+                {
                     let tlength = min(edtla, bytes_transferred);
-                    self.interrupter.lock().unwrap().send_transfer_event_trb(
+                    self.interrupter.lock().send_transfer_event_trb(
                         TrbCompletionCode::Success,
-                        atrb.trb.cast::<EventDataTrb>().get_event_data(),
+                        atrb.trb.cast::<EventDataTrb>()?.get_event_data(),
                         tlength,
                         true,
                         self.slot_id,
                         self.endpoint_id,
-                    );
+                    )?;
                 } else {
                     // For Short Transfer details, see xHCI spec 4.10.1.1.
                     let residual_transfer_length = edtla - bytes_transferred;
                     if edtla > bytes_transferred {
                         debug!("on transfer complete short packet");
-                        self.interrupter.lock().unwrap().send_transfer_event_trb(
+                        self.interrupter.lock().send_transfer_event_trb(
                             TrbCompletionCode::ShortPacket,
                             atrb.gpa,
                             residual_transfer_length,
                             true,
                             self.slot_id,
                             self.endpoint_id,
-                        );
+                        )?;
                     } else {
                         debug!("on transfer complete success");
-                        self.interrupter.lock().unwrap().send_transfer_event_trb(
+                        self.interrupter.lock().send_transfer_event_trb(
                             TrbCompletionCode::Success,
                             atrb.gpa,
                             residual_transfer_length,
                             true,
                             self.slot_id,
                             self.endpoint_id,
-                        );
+                        )?;
                     }
                 }
             }
         }
+        Ok(())
     }
 
     /// Send this transfer to backend if it's a valid transfer.
-    pub fn send_to_backend_if_valid(self) {
-        if self.validate_transfer() {
+    pub fn send_to_backend_if_valid(self) -> Result<()> {
+        if self.validate_transfer()? {
             // Backend should invoke on transfer complete when transfer is completed.
             let port = self.port.clone();
             let mut backend = port.get_backend_device();
             match &mut *backend {
-                Some(backend) => backend.submit_transfer(self),
+                Some(backend) => backend.submit_transfer(self)?,
                 None => {
                     error!("backend is already disconnected");
-                    self.transfer_completion_event.write(1).unwrap();
+                    self.transfer_completion_event
+                        .write(1)
+                        .map_err(err_msg!(Error::SysError))?;
                 }
             }
         } else {
             error!("invalid td on transfer ring");
-            self.transfer_completion_event.write(1).unwrap();
+            self.transfer_completion_event
+                .write(1)
+                .map_err(err_msg!(Error::SysError))?;
         }
+        Ok(())
     }
 
     // Check each trb in the transfer descriptor for invalid or out of bounds
     // parameters. Returns true iff the transfer descriptor is valid.
-    fn validate_transfer(&self) -> bool {
+    fn validate_transfer(&self) -> Result<bool> {
         let mut valid = true;
         for atrb in &self.transfer_trbs {
             if !trb_is_valid(&atrb) {
-                self.interrupter.lock().unwrap().send_transfer_event_trb(
+                self.interrupter.lock().send_transfer_event_trb(
                     TrbCompletionCode::TrbError,
                     atrb.gpa,
                     0,
                     false,
                     self.slot_id,
                     self.endpoint_id,
-                );
+                )?;
                 valid = false;
             }
         }
-        valid
+        Ok(valid)
     }
 }
 
 fn trb_is_valid(atrb: &AddressedTrb) -> bool {
-    atrb.trb.can_be_in_transfer_ring() && (atrb.trb.interrupter_target() < MAX_INTERRUPTER)
+    let can_be_in_transfer_ring = match atrb.trb.can_be_in_transfer_ring() {
+        Ok(v) => v,
+        Err(e) => {
+            error!("unknown error {:?}", e);
+            return false;
+        }
+    };
+    can_be_in_transfer_ring && (atrb.trb.interrupter_target() < MAX_INTERRUPTER)
 }

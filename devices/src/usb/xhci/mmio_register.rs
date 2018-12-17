@@ -4,9 +4,10 @@
 
 use std;
 use std::boxed::Box;
-use std::cmp::{max, min, Ord, Ordering, PartialEq, PartialOrd};
+use std::cmp::{max, min, Ord, Ordering, PartialOrd};
 use std::mem::size_of;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
+use sync::Mutex;
 
 use data_model::DataInit;
 
@@ -216,7 +217,7 @@ impl<T: RegisterValue> Register<T> {
     }
 
     fn lock(&self) -> MutexGuard<RegisterInner<T>> {
-        self.inner.lock().expect("fail to lock register")
+        self.inner.lock()
     }
 }
 
@@ -347,12 +348,13 @@ impl<T: RegisterValue> Register<T> {
 #[macro_export]
 macro_rules! register {
     (
-        name: $name:tt,
-        ty: $ty:ty,
-        offset: $offset:expr,
-        reset_value: $rv:expr,
-        guest_writeable_mask: $mask:expr,
-        guest_write_1_to_clear_mask: $w1tcm:expr,
+        name:
+        $name:tt,ty:
+        $ty:ty,offset:
+        $offset:expr,reset_value:
+        $rv:expr,guest_writeable_mask:
+        $mask:expr,guest_write_1_to_clear_mask:
+        $w1tcm:expr,
     ) => {{
         let spec: RegisterSpec<$ty> = RegisterSpec::<$ty> {
             name: String::from($name),
@@ -363,7 +365,7 @@ macro_rules! register {
         };
         Register::<$ty>::new(spec, $rv)
     }};
-    (name: $name:tt, ty: $ty:ty,offset: $offset:expr,reset_value: $rv:expr,) => {{
+    (name: $name:tt,ty: $ty:ty,offset: $offset:expr,reset_value: $rv:expr,) => {{
         let spec: RegisterSpec<$ty> = RegisterSpec::<$ty> {
             name: String::from($name),
             offset: $offset,
@@ -378,8 +380,8 @@ macro_rules! register {
 #[macro_export]
 macro_rules! register_array {
     (
-        name: $name:tt,
-        ty:
+        name:
+        $name:tt,ty:
         $ty:ty,cnt:
         $cnt:expr,base_offset:
         $base_offset:expr,stride:
@@ -570,16 +572,16 @@ mod tests {
 
         let s2 = state.clone();
         r.set_write_cb(move |val: u8| {
-            *s2.lock().unwrap() = val as u8;
+            *s2.lock() = val as u8;
             val
         });
         let data: [u8; 4] = [0, 0, 0, 0xff];
         r.write_bar(0, &data);
-        assert_eq!(*state.lock().unwrap(), 0xf);
+        assert_eq!(*state.lock(), 0xf);
         r.set_value(0xab);
-        assert_eq!(*state.lock().unwrap(), 0xf);
+        assert_eq!(*state.lock(), 0xf);
         let data: [u8; 1] = [0xfc];
         r.write_bar(3, &data);
-        assert_eq!(*state.lock().unwrap(), 0xc);
+        assert_eq!(*state.lock(), 0xc);
     }
 }

@@ -63,7 +63,10 @@ impl EventRing {
         trb.set_cycle_bit(!self.producer_cycle_state);
         self.mem
             .write_obj_at_addr(trb, self.enqueue_pointer)
-            .expect("Fail to write Guest Memory");
+            .map_err(err_msg!(
+                Error::InvalidMemoryAccess,
+                "Fail to write Guest Memory"
+            ))?;
 
         // Updating the cycle state bit should always happen after updating other parts.
         fence(Ordering::SeqCst);
@@ -78,10 +81,14 @@ impl EventRing {
             let address = self.enqueue_pointer;
             let address = address
                 .checked_add(CYCLE_STATE_OFFSET as u64)
-                .expect("unexpected address in event ring");
+                .ok_or(Error::InvalidMemoryAccess)
+                .map_err(err_msg!("unexpected address in event ring"))?;
             self.mem
-                .write_at_addr(cycle_bit_dword, address)
-                .expect("Fail to write Guest Memory");
+                .write_all_at_addr(cycle_bit_dword, address)
+                .map_err(err_msg!(
+                    Error::InvalidMemoryAccess,
+                    "Fail to write Guest Memory"
+                ))?;
         }
 
         debug!(
@@ -107,17 +114,17 @@ impl EventRing {
     }
 
     /// Set segment table size.
-    pub fn set_seg_table_size(&mut self, size: u16) {
+    pub fn set_seg_table_size(&mut self, size: u16) -> Result<()> {
         debug!("event ring seg table size is set to {}", size);
         self.segment_table_size = size;
-        self.try_reconfigure_event_ring();
+        self.try_reconfigure_event_ring()
     }
 
     /// Set segment table base addr.
-    pub fn set_seg_table_base_addr(&mut self, addr: GuestAddress) {
+    pub fn set_seg_table_base_addr(&mut self, addr: GuestAddress) -> Result<()> {
         debug!("event ring seg table base addr is set to {:#x}", addr.0);
         self.segment_table_base_address = addr;
-        self.try_reconfigure_event_ring();
+        self.try_reconfigure_event_ring()
     }
 
     /// Set dequeue pointer.
@@ -139,8 +146,7 @@ impl EventRing {
     /// Event ring is considered full when there is only space for one last TRB. In this case, xHC
     /// should write an error Trb and do a bunch of handlings. See spec, figure 4-12 for more
     /// details.
-    /// For now, we just check event ring full and panic (as it's unlikely to happen).
-    /// TODO(jkwang) Handle event ring full.
+    /// For now, we just check event ring full and fail (as it's unlikely to happen).
     pub fn is_full(&self) -> Result<bool> {
         if self.trb_count == 1 {
             // erst == event ring segment table
@@ -153,12 +159,11 @@ impl EventRing {
     }
 
     /// Try to init event ring. Will fail if seg table size/address are invalid.
-    fn try_reconfigure_event_ring(&mut self) {
+    fn try_reconfigure_event_ring(&mut self) -> Result<()> {
         if self.segment_table_size == 0 || self.segment_table_base_address.0 == 0 {
-            return;
+            return Ok(());
         }
         self.load_current_seg_table_entry()
-            .expect("Unable to init event ring");
     }
 
     // Check if this event ring is inited.
@@ -238,8 +243,8 @@ mod test {
             GuestAddress(0x8 + 2 * size_of::<EventRingSegmentTableEntry>() as u64),
         ).unwrap();
         // Init event ring. Must init after segment tables writting.
-        er.set_seg_table_size(3);
-        er.set_seg_table_base_addr(GuestAddress(0x8));
+        er.set_seg_table_size(3).unwrap();
+        er.set_seg_table_base_addr(GuestAddress(0x8)).unwrap();
         er.set_dequeue_pointer(GuestAddress(0x100));
 
         let mut trb = Trb::new();

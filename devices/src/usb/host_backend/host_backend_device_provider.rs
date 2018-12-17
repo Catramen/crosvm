@@ -14,6 +14,7 @@ use std::os::unix::net::UnixDatagram;
 use std::time::Duration;
 use sys_util::WatchingEvents;
 use usb::async_job_queue::AsyncJobQueue;
+use usb::error::{Error, Result};
 use usb::event_loop::EventHandler;
 use usb::event_loop::EventLoop;
 use usb::xhci::usb_hub::UsbHub;
@@ -56,17 +57,11 @@ impl HostBackendDeviceProvider {
 }
 
 impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
-    fn start(&mut self, event_loop: Arc<EventLoop>, hub: Arc<UsbHub>) {
+    fn start(&mut self, event_loop: Arc<EventLoop>, hub: Arc<UsbHub>) -> Result<()> {
         match mem::replace(self, HostBackendDeviceProvider::Failed) {
             HostBackendDeviceProvider::Created { sock } => {
-                let ctx = match Context::new(event_loop.clone()) {
-                    Some(ctx) => ctx,
-                    None => {
-                        error!("could not create libusb context");
-                        return;
-                    }
-                };
-                let job_queue = AsyncJobQueue::init(&event_loop);
+                let ctx = Context::new(event_loop.clone())?;
+                let job_queue = AsyncJobQueue::init(&event_loop)?;
 
                 let inner = Arc::new(ProviderInner::new(job_queue, ctx, sock, hub));
                 let handler: Arc<EventHandler> = inner.clone();
@@ -76,12 +71,15 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
                     Arc::downgrade(&handler),
                 );
                 *self = HostBackendDeviceProvider::Started { inner };
+                Ok(())
             }
             HostBackendDeviceProvider::Started { inner: _ } => {
-                panic!("Host backend provider is already started");
+                error!("Host backend provider is already started");
+                Err(Error::BadState)
             }
             HostBackendDeviceProvider::Failed => {
-                panic!("Host backend provider is already failed");
+                error!("Host backend provider is already failed");
+                Err(Error::BadState)
             }
         }
     }
@@ -90,9 +88,10 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
         match self {
             HostBackendDeviceProvider::Created { sock } => vec![sock.as_raw_fd()],
             _ => {
-                panic!(
+                error!(
                     "Trying to get keepfds when HostBackendDeviceProvider is not in created state"
                 );
+                vec![]
             }
         }
     }
@@ -123,8 +122,8 @@ impl ProviderInner {
 }
 
 impl EventHandler for ProviderInner {
-    fn on_event(&self, _fd: RawFd) {
-        let cmd = self.sock.recv().unwrap();
+    fn on_event(&self, _fd: RawFd) -> Result<()> {
+        let cmd = self.sock.recv().map_err(err_msg!(Error::Unknown))?;
         match cmd {
             UsbControlCommand::AttachDevice {
                 bus,
@@ -137,8 +136,17 @@ impl EventHandler for ProviderInner {
                 let device = match self.ctx.get_device(bus, addr, vid, pid) {
                     Some(d) => d,
                     None => {
-                        self.sock.send(&UsbControlResult::NoSuchDevice).unwrap();
-                        return;
+                        error!(
+                            "cannot get device bus: {}, addr: {}, vid: {}, pid: {}",
+                            bus, addr, vid, pid
+                        );
+                        // The send failure will be logged, but event loop still think the event is
+                        // handled.
+                        let _ = self
+                            .sock
+                            .send(&UsbControlResult::NoSuchDevice)
+                            .map_err(err_msg!("cannot send response"));
+                        return Ok(());
                     }
                 };
                 #[cfg(feature = "sandboxed-libusb")]
@@ -157,8 +165,13 @@ impl EventHandler for ProviderInner {
                             Ok(handle) => handle,
                             Err(e) => {
                                 error!("fail to open device {:?}", e);
-                                self.sock.send(&UsbControlResult::FailedToOpenDevice).unwrap();
-                                return;
+                                // The send failure will be logged, but event loop still think the event is
+                                // handled.
+                                let _ = self
+                                    .sock
+                                    .send(&UsbControlResult::FailedToOpenDevice)
+                                    .map_err(err_msg!("cannot send response"));
+                                return Ok(());
                             }
                         }
                     }
@@ -168,8 +181,13 @@ impl EventHandler for ProviderInner {
                     Ok(handle) => handle,
                     Err(e) => {
                         error!("fail to open device {:?}", e);
-                        self.sock.send(&UsbControlResult::FailedToOpenDevice).unwrap();
-                        return;
+                        // The send failure will be logged, but event loop still think the event is
+                        // handled.
+                        let _ = self
+                            .sock
+                            .send(&UsbControlResult::FailedToOpenDevice)
+                            .map_err(err_msg!("cannot send response"));
+                        return Ok(());
                     }
                 };
                 let device = Box::new(HostDevice::new(
@@ -180,19 +198,41 @@ impl EventHandler for ProviderInner {
                 let port = self.usb_hub.connect_backend(device);
                 match port {
                     Some(port) => {
-                        self.sock.send(&UsbControlResult::Ok { port }).unwrap();
+                        // The send failure will be logged, but event loop still think the event is
+                        // handled.
+                        let _ = self
+                            .sock
+                            .send(&UsbControlResult::Ok { port })
+                            .map_err(err_msg!("cannot send response"));
                     }
                     None => {
-                        self.sock.send(&UsbControlResult::NoAvailablePort).unwrap();
+                        // The send failure will be logged, but event loop still think the event is
+                        // handled.
+                        let _ = self
+                            .sock
+                            .send(&UsbControlResult::NoAvailablePort)
+                            .map_err(err_msg!("cannot send response"));
                     }
                 }
+                Ok(())
             }
             UsbControlCommand::DetachDevice { port } => {
                 if self.usb_hub.disconnect_port(port) {
-                    self.sock.send(&UsbControlResult::Ok { port }).unwrap();
+                    // The send failure will be logged, but event loop still think the event is
+                    // handled.
+                    let _ = self
+                        .sock
+                        .send(&UsbControlResult::Ok { port })
+                        .map_err(err_msg!("cannot send response"));
                 } else {
-                    self.sock.send(&UsbControlResult::NoSuchDevice).unwrap();
+                    // The send failure will be logged, but event loop still think the event is
+                    // handled.
+                    let _ = self
+                        .sock
+                        .send(&UsbControlResult::NoSuchDevice)
+                        .map_err(err_msg!("cannot send response"));
                 }
+                Ok(())
             }
             UsbControlCommand::ListDevice { port } => {
                 let port_number = port;
@@ -211,7 +251,13 @@ impl EventHandler for ProviderInner {
                     },
                     None => UsbControlResult::NoSuchPort,
                 };
-                self.sock.send(&result).unwrap();
+                // The send failure will be logged, but event loop still think the event is
+                // handled.
+                let _ = self
+                    .sock
+                    .send(&result)
+                    .map_err(err_msg!("cannot send response"));
+                Ok(())
             }
         }
     }

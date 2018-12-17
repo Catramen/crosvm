@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
+use sync::Mutex;
 use usb::auto_callback::AutoCallback;
+use usb::error::{Error, Result};
 use usb::event_loop::{EventHandler, EventLoop};
 use usb::xhci::xhci_abi::*;
 
@@ -27,7 +29,11 @@ enum RingBufferState {
 /// a ring buffer controller with the struct.
 pub trait TransferDescriptorHandler {
     /// Process descriptor asynchronously, write complete_event when done.
-    fn handle_transfer_descriptor(&self, descriptor: TransferDescriptor, complete_event: EventFd);
+    fn handle_transfer_descriptor(
+        &self,
+        descriptor: TransferDescriptor,
+        complete_event: EventFd,
+    ) -> Result<()>;
     /// Stop is called when trying to stop ring buffer controller. Returns true when stop must be
     /// performed asynchronously. This happens because the handler is handling some descriptor
     /// asynchronously, the stop callback of ring buffer controller must be called after the
@@ -86,7 +92,7 @@ where
     }
 
     fn lock_ring_buffer(&self) -> MutexGuard<RingBuffer> {
-        self.ring_buffer.lock().expect("cannot lock ring buffer")
+        self.ring_buffer.lock()
     }
 
     /// Set dequeue pointer of the internal ring buffer.
@@ -104,26 +110,27 @@ where
     }
 
     /// Start the ring buffer.
-    pub fn start(&self) {
+    pub fn start(&self) -> Result<()> {
         debug!("{} started", self.name);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if *state != RingBufferState::Running {
             *state = RingBufferState::Running;
-            self.event.write(1).expect("cannot write to event fd");
+            self.event.write(1).map_err(err_msg!(Error::SysError))?;
         }
+        Ok(())
     }
 
     /// Stop the ring buffer asynchronously.
     pub fn stop(&self, callback: AutoCallback) {
         debug!("{} being stopped", self.name);
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         if *state == RingBufferState::Stopped {
             debug!("{} is already stopped", self.name);
             return;
         }
-        if self.handler.lock().unwrap().stop() {
+        if self.handler.lock().stop() {
             *state = RingBufferState::Stopping;
-            self.stop_callback.lock().unwrap().push(callback);
+            self.stop_callback.lock().push(callback);
         } else {
             *state = RingBufferState::Stopped;
         }
@@ -144,36 +151,35 @@ impl<T> EventHandler for RingBufferController<T>
 where
     T: 'static + TransferDescriptorHandler + Send,
 {
-    fn on_event(&self, _fd: RawFd) {
+    fn on_event(&self, _fd: RawFd) -> Result<()> {
         // `self.event` triggers ring buffer controller to run, the value read is not important.
-        let _ = self.event.read();
-        let mut state = self.state.lock().unwrap();
+        let _ = self.event.read().map_err(err_msg!(Error::SysError))?;
+        let mut state = self.state.lock();
 
         match *state {
-            RingBufferState::Stopped => return,
+            RingBufferState::Stopped => return Ok(()),
             RingBufferState::Stopping => {
                 debug!("{}: stopping ring buffer controller", self.name);
                 *state = RingBufferState::Stopped;
-                self.stop_callback.lock().unwrap().clear();
-                return;
+                self.stop_callback.lock().clear();
+                return Ok(());
             }
             RingBufferState::Running => {}
         }
 
-        let transfer_descriptor = match self.lock_ring_buffer().dequeue_transfer_descriptor() {
+        let transfer_descriptor = match self.lock_ring_buffer().dequeue_transfer_descriptor()? {
             Some(transfer_descriptor) => transfer_descriptor,
             None => {
                 *state = RingBufferState::Stopped;
-                self.stop_callback.lock().unwrap().clear();
-                return;
+                self.stop_callback.lock().clear();
+                return Ok(());
             }
         };
 
-        let event = self.event.try_clone().unwrap();
+        let event = self.event.try_clone().map_err(err_msg!(Error::Unknown))?;
         self.handler
             .lock()
-            .unwrap()
-            .handle_transfer_descriptor(transfer_descriptor, event);
+            .handle_transfer_descriptor(transfer_descriptor, event)
     }
 }
 
@@ -182,6 +188,7 @@ mod tests {
     use super::*;
     use std::mem::size_of;
     use std::sync::mpsc::{channel, Sender};
+    use usb::event_loop::FailHandle;
 
     struct TestHandler {
         sender: Sender<i32>,
@@ -192,12 +199,13 @@ mod tests {
             &self,
             descriptor: TransferDescriptor,
             complete_event: EventFd,
-        ) {
+        ) -> Result<()> {
             for atrb in descriptor {
                 assert_eq!(atrb.trb.trb_type().unwrap(), TrbType::Normal);
                 self.sender.send(atrb.trb.get_parameter() as i32).unwrap();
             }
             complete_event.write(1).unwrap();
+            Ok(())
         }
     }
 
@@ -256,11 +264,19 @@ mod tests {
         gm
     }
 
+    struct VoidFailHandle {}
+    impl FailHandle for VoidFailHandle {
+        fn fail(&self) {}
+        fn failed(&self) -> bool {
+            false
+        }
+    }
+
     #[test]
     fn test_ring_buffer_controller() {
         let (tx, rx) = channel();
         let mem = setup_mem();
-        let (l, j) = EventLoop::start();
+        let (l, j) = EventLoop::start(Arc::new(VoidFailHandle {})).unwrap();
         let l = Arc::new(l);
         let controller = RingBufferController::create_controller(
             "".to_string(),
@@ -270,7 +286,7 @@ mod tests {
         );
         controller.set_dequeue_pointer(GuestAddress(0x100));
         controller.set_consumer_cycle_state(false);
-        controller.start();
+        controller.start().unwrap();
         assert_eq!(rx.recv().unwrap(), 1);
         assert_eq!(rx.recv().unwrap(), 2);
         assert_eq!(rx.recv().unwrap(), 3);

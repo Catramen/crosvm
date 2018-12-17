@@ -6,6 +6,7 @@ use std::os::raw::c_short;
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Weak};
 use sys_util::WatchingEvents;
+use usb::error::{Error, Result};
 use usb::event_loop::{EventHandler, EventLoop, Fd};
 use usb_util::libusb_context::{LibUsbContext, LibUsbPollfdChangeHandler};
 use usb_util::libusb_device::LibUsbDevice;
@@ -19,14 +20,8 @@ pub struct Context {
 
 impl Context {
     /// Create a new context.
-    pub fn new(event_loop: Arc<EventLoop>) -> Option<Context> {
-        let context = match LibUsbContext::new() {
-            Ok(ctx) => ctx,
-            Err(e) => {
-                error!("could not create libusb context. error {:?}", e);
-                return None;
-            }
-        };
+    pub fn new(event_loop: Arc<EventLoop>) -> Result<Context> {
+        let context = LibUsbContext::new().map_err(err_msg!(Error::BadState))?;
         let ctx = Context {
             context: context.clone(),
             event_loop,
@@ -34,11 +29,11 @@ impl Context {
                 context: context.clone(),
             }),
         };
-        ctx.init_event_handler();
-        Some(ctx)
+        ctx.init_event_handler()?;
+        Ok(ctx)
     }
 
-    fn init_event_handler(&self) {
+    fn init_event_handler(&self) -> Result<()> {
         for pollfd in self.context.get_pollfd_iter() {
             debug!("event loop add event {} events handler", pollfd.fd);
             self.event_loop.add_event(
@@ -53,6 +48,7 @@ impl Context {
                 event_loop: self.event_loop.clone(),
                 event_handler: Arc::downgrade(&self.event_handler),
             }));
+        Ok(())
     }
 
     /// Get libusb device with matching bus, addr, vid and pid.
@@ -83,8 +79,9 @@ struct LibUsbEventHandler {
 }
 
 impl EventHandler for LibUsbEventHandler {
-    fn on_event(&self, _fd: RawFd) {
+    fn on_event(&self, _fd: RawFd) -> Result<()> {
         self.context.handle_events_nonblock();
+        Ok(())
     }
 }
 
@@ -104,7 +101,7 @@ impl LibUsbPollfdChangeHandler for PollfdChangeHandler {
 
     fn remove_poll_fd(&self, fd: RawFd) {
         if let Some(h) = self.event_handler.upgrade() {
-            h.on_event(0);
+            h.on_event(0).unwrap();
         }
         self.event_loop.remove_event_for_fd(&Fd(fd));
     }

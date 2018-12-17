@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use sync::Mutex;
 use sys_util::{EventFd, GuestMemory};
 use usb::event_loop::EventLoop;
 use usb::xhci::ring_buffer_controller::{RingBufferController, TransferDescriptorHandler};
@@ -11,6 +12,7 @@ use super::interrupter::Interrupter;
 use super::usb_hub::UsbPort;
 use super::xhci_abi::TransferDescriptor;
 use super::xhci_transfer::XhciTransferManager;
+use usb::error::Result;
 
 /// Transfer ring controller manages transfer ring.
 pub type TransferRingController = RingBufferController<TransferRingTrbHandler>;
@@ -30,7 +32,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
         &self,
         descriptor: TransferDescriptor,
         completion_event: EventFd,
-    ) {
+    ) -> Result<()> {
         let xhci_transfer = self.transfer_manager.create_transfer(
             self.mem.clone(),
             self.port.clone(),
@@ -40,7 +42,7 @@ impl TransferDescriptorHandler for TransferRingTrbHandler {
             descriptor,
             completion_event,
         );
-        xhci_transfer.send_to_backend_if_valid();
+        xhci_transfer.send_to_backend_if_valid()
     }
 
     fn stop(&self) -> bool {

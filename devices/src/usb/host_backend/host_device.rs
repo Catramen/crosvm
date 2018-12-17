@@ -3,12 +3,14 @@
 // found in the LICENSE file.
 
 use std::mem::drop;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use sync::Mutex;
 
 use super::usb_endpoint::UsbEndpoint;
 use super::utils::{submit_transfer, update_state};
 use std::collections::HashMap;
 use usb::async_job_queue::AsyncJobQueue;
+use usb::error::{Error, Result};
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
 use usb::xhci::xhci_backend_device::{UsbDeviceAddress, XhciBackendDevice};
 use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferState, XhciTransferType};
@@ -46,33 +48,35 @@ enum HostToDeviceControlRequest {
 
 impl HostToDeviceControlRequest {
     /// Analyze request setup.
-    pub fn analyze_request_setup(request_setup: &UsbRequestSetup) -> HostToDeviceControlRequest {
-        if request_setup.get_type().unwrap() == ControlRequestType::Standard
+    pub fn analyze_request_setup(
+        request_setup: &UsbRequestSetup,
+    ) -> Result<HostToDeviceControlRequest> {
+        if request_setup.get_type().ok_or(Error::BadState)? == ControlRequestType::Standard
             && request_setup.get_recipient() == ControlRequestRecipient::Device
             && request_setup.get_standard_request() == Some(StandardControlRequest::SetAddress)
         {
-            return HostToDeviceControlRequest::SetAddress;
+            return Ok(HostToDeviceControlRequest::SetAddress);
         }
-        if request_setup.get_type().unwrap() == ControlRequestType::Standard
+        if request_setup.get_type().ok_or(Error::BadState)? == ControlRequestType::Standard
             && request_setup.get_recipient() == ControlRequestRecipient::Device
             && request_setup.get_standard_request()
                 == Some(StandardControlRequest::SetConfiguration)
         {
-            return HostToDeviceControlRequest::SetConfig;
+            return Ok(HostToDeviceControlRequest::SetConfig);
         };
-        if request_setup.get_type().unwrap() == ControlRequestType::Standard
+        if request_setup.get_type().ok_or(Error::BadState)? == ControlRequestType::Standard
             && request_setup.get_recipient() == ControlRequestRecipient::Interface
             && request_setup.get_standard_request() == Some(StandardControlRequest::SetInterface)
         {
-            return HostToDeviceControlRequest::SetInterface;
+            return Ok(HostToDeviceControlRequest::SetInterface);
         };
-        if request_setup.get_type().unwrap() == ControlRequestType::Standard
+        if request_setup.get_type().ok_or(Error::BadState)? == ControlRequestType::Standard
             && request_setup.get_recipient() == ControlRequestRecipient::Endpoint
             && request_setup.get_standard_request() == Some(StandardControlRequest::ClearFeature)
         {
-            return HostToDeviceControlRequest::ClearFeature;
+            return Ok(HostToDeviceControlRequest::ClearFeature);
         };
-        HostToDeviceControlRequest::Other
+        Ok(HostToDeviceControlRequest::Other)
     }
 }
 
@@ -138,14 +142,9 @@ impl HostDevice {
     }
     fn detach_host_drivers(&mut self) {
         for i in 0..self.get_interface_number_of_active_config() {
-            match self.device_handle.lock().unwrap().kernel_driver_active(i) {
+            match self.device_handle.lock().kernel_driver_active(i) {
                 Ok(true) => {
-                    if let Err(e) = self
-                        .device_handle
-                        .lock()
-                        .unwrap()
-                        .detach_kernel_driver(i as i32)
-                    {
+                    if let Err(e) = self.device_handle.lock().detach_kernel_driver(i as i32) {
                         error!("unexpected error {:?}", e);
                     } else {
                         debug!("host driver detached for interface {}", i);
@@ -164,7 +163,7 @@ impl HostDevice {
 
     fn release_interfaces(&mut self) {
         for i in &self.claimed_interfaces {
-            if let Err(e) = self.device_handle.lock().unwrap().release_interface(*i) {
+            if let Err(e) = self.device_handle.lock().release_interface(*i) {
                 error!("could not release interface {:?}", e);
             }
         }
@@ -173,71 +172,78 @@ impl HostDevice {
 
     fn attach_host_drivers(&mut self) {
         for i in &self.host_claimed_interfaces {
-            if let Err(e) = self.device_handle.lock().unwrap().attach_kernel_driver(*i) {
+            if let Err(e) = self.device_handle.lock().attach_kernel_driver(*i) {
                 error!("could not attach host kernel {:?}", e);
             }
         }
     }
 
-    fn handle_control_transfer(&mut self, transfer: XhciTransfer) {
+    fn handle_control_transfer(&mut self, transfer: XhciTransfer) -> Result<()> {
         let xhci_transfer = Arc::new(transfer);
-        match xhci_transfer.get_transfer_type() {
+        match xhci_transfer.get_transfer_type()? {
             XhciTransferType::SetupStage(setup) => {
                 if self.ctl_ep_state != ControlEndpointState::SetupStage {
                     error!("Control endpoing is in an inconsistant state");
-                    return;
+                    return Ok(());
                 }
                 debug!("setup stage setup buffer {:?}", setup);
                 self.control_request_setup = setup;
-                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0);
+                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0)?;
                 self.ctl_ep_state = ControlEndpointState::DataStage;
             }
             XhciTransferType::DataStage(buffer) => {
                 if self.ctl_ep_state != ControlEndpointState::DataStage {
                     error!("Control endpoing is in an inconsistant state");
-                    return;
+                    return Ok(());
                 }
                 self.buffer = Some(buffer);
-                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0);
+                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0)?;
                 self.ctl_ep_state = ControlEndpointState::StatusStage;
             }
             XhciTransferType::StatusStage => {
                 if self.ctl_ep_state == ControlEndpointState::SetupStage {
                     error!("Control endpoing is in an inconsistant state");
-                    return;
+                    return Ok(());
                 }
                 let buffer = self.buffer.take();
                 match self.control_request_setup.get_direction() {
                     Some(ControlRequestDataPhaseTransferDirection::HostToDevice) => {
                         match HostToDeviceControlRequest::analyze_request_setup(
                             &self.control_request_setup,
-                        ) {
+                        )? {
                             HostToDeviceControlRequest::Other => {
                                 let mut control_transfer = control_transfer(0);
                                 control_transfer
                                     .buffer_mut()
                                     .set_request_setup(&self.control_request_setup);
                                 if let Some(buffer) = buffer {
-                                    buffer.read(&mut control_transfer.buffer_mut().data_buffer);
+                                    buffer.read(&mut control_transfer.buffer_mut().data_buffer)?;
                                 }
                                 let tmp_transfer = xhci_transfer.clone();
                                 control_transfer.set_callback(
                                     move |t: UsbTransfer<ControlTransferBuffer>| {
-                                        update_state(&xhci_transfer, &t);
-                                        let state = xhci_transfer.state().lock().unwrap();
+                                        update_state(&xhci_transfer, &t).unwrap();
+                                        let state = xhci_transfer.state().lock();
                                         match *state {
                                             XhciTransferState::Cancelled => {
                                                 drop(state);
-                                                xhci_transfer.on_transfer_complete(
-                                                    &TransferStatus::Cancelled,
-                                                    0,
-                                                );
+                                                xhci_transfer
+                                                    .on_transfer_complete(
+                                                        &TransferStatus::Cancelled,
+                                                        0,
+                                                    )
+                                                    .unwrap();
                                             }
                                             XhciTransferState::Completed => {
                                                 let status = t.status();
                                                 let actual_length = t.actual_length();
                                                 drop(state);
-                                                xhci_transfer.on_transfer_complete(&status, actual_length as u32);
+                                                xhci_transfer
+                                                    .on_transfer_complete(
+                                                        &status,
+                                                        actual_length as u32,
+                                                    )
+                                                    .unwrap();
                                             }
                                             _ => {
                                                 // update_state is already invoked before match. This
@@ -254,28 +260,28 @@ impl HostDevice {
                                     tmp_transfer,
                                     &self.device_handle,
                                     control_transfer,
-                                );
+                                )?;
                             }
                             HostToDeviceControlRequest::SetAddress => {
                                 debug!("host device handling set address");
                                 let addr = self.control_request_setup.value as u32;
                                 self.set_address(addr);
-                                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0);
+                                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0)?;
                             }
                             HostToDeviceControlRequest::SetConfig => {
                                 debug!("host device handling set config");
-                                let status = self.set_config();
-                                xhci_transfer.on_transfer_complete(&status, 0);
+                                let status = self.set_config()?;
+                                xhci_transfer.on_transfer_complete(&status, 0)?;
                             }
                             HostToDeviceControlRequest::SetInterface => {
                                 debug!("host device handling set interface");
-                                let status = self.set_interface();
-                                xhci_transfer.on_transfer_complete(&status, 0);
+                                let status = self.set_interface()?;
+                                xhci_transfer.on_transfer_complete(&status, 0)?;
                             }
                             HostToDeviceControlRequest::ClearFeature => {
                                 debug!("host device handling clear feature");
-                                let status = self.clear_feature();
-                                xhci_transfer.on_transfer_complete(&status, 0);
+                                let status = self.clear_feature()?;
+                                xhci_transfer.on_transfer_complete(&status, 0)?;
                             }
                         };
                     }
@@ -288,28 +294,30 @@ impl HostDevice {
                         control_transfer.set_callback(
                             move |t: UsbTransfer<ControlTransferBuffer>| {
                                 debug!("setup token control transfer callback invoked");
-                                update_state(&xhci_transfer, &t);
-                                let state = xhci_transfer.state().lock().unwrap();
+                                update_state(&xhci_transfer, &t).unwrap();
+                                let state = xhci_transfer.state().lock();
                                 match *state {
                                     XhciTransferState::Cancelled => {
                                         debug!("transfer cancelled");
                                         drop(state);
                                         xhci_transfer
-                                            .on_transfer_complete(&TransferStatus::Cancelled, 0);
+                                            .on_transfer_complete(&TransferStatus::Cancelled, 0)
+                                            .unwrap();
                                     }
                                     XhciTransferState::Completed => {
                                         let status = t.status();
                                         let actual_length = t.actual_length();
                                         if let Some(ref buffer) = buffer {
                                             let bytes =
-                                                buffer.write(&t.buffer().data_buffer) as u32;
+                                                buffer.write(&t.buffer().data_buffer).unwrap()
+                                                    as u32;
                                             debug!(
                                                 "transfer completed bytes: {} actual length {}",
                                                 bytes, actual_length
                                             );
                                         }
                                         drop(state);
-                                        xhci_transfer.on_transfer_complete(&status, 0);
+                                        xhci_transfer.on_transfer_complete(&status, 0).unwrap();
                                     }
                                     _ => {
                                         // update_state is already invoked before this match.
@@ -324,7 +332,7 @@ impl HostDevice {
                             tmp_transfer,
                             &self.device_handle,
                             control_transfer,
-                        );
+                        )?;
                     }
                     None => error!("Unknown transfer direction!"),
                 }
@@ -336,9 +344,10 @@ impl HostDevice {
                 panic!("Non control transfer sent to control endpoint. There is a crosvm bug.");
             }
         }
+        Ok(())
     }
 
-    fn set_config(&mut self) -> TransferStatus {
+    fn set_config(&mut self) -> Result<TransferStatus> {
         // It's a standard, set_config, device request.
         let config = (self.control_request_setup.value & 0xff) as i32;
         debug!(
@@ -349,38 +358,35 @@ impl HostDevice {
         let cur_config = self
             .device_handle
             .lock()
-            .unwrap()
             .get_active_configuration()
-            .unwrap();
+            .map_err(err_msg!(Error::Unknown))?;
         debug!("current config is: {}", cur_config);
         if config != cur_config {
             self.device_handle
                 .lock()
-                .unwrap()
                 .set_active_configuration(config)
-                .unwrap();
+                .map_err(err_msg!(Error::Unknown))?;
         }
         self.claim_interfaces();
-        self.create_endpoints();
-        TransferStatus::Completed
+        self.create_endpoints()?;
+        Ok(TransferStatus::Completed)
     }
 
-    fn set_interface(&mut self) -> TransferStatus {
+    fn set_interface(&mut self) -> Result<TransferStatus> {
         debug!("set interface");
         // It's a standard, set_interface, interface request.
         let interface = self.control_request_setup.index;
         let alt_setting = self.control_request_setup.value;
         self.device_handle
             .lock()
-            .unwrap()
             .set_interface_alt_setting(interface as i32, alt_setting as i32)
-            .unwrap();
+            .map_err(err_msg!(Error::Unknown))?;
         self.alt_settings.insert(interface, alt_setting);
-        self.create_endpoints();
-        TransferStatus::Completed
+        self.create_endpoints()?;
+        Ok(TransferStatus::Completed)
     }
 
-    fn clear_feature(&mut self) -> TransferStatus {
+    fn clear_feature(&mut self) -> Result<TransferStatus> {
         debug!("clear feature");
         let request_setup = &self.control_request_setup;
         // It's a standard, clear_feature, endpoint request.
@@ -388,16 +394,15 @@ impl HostDevice {
         if request_setup.value == STD_FEATURE_ENDPOINT_HALT {
             self.device_handle
                 .lock()
-                .unwrap()
                 .clear_halt(request_setup.index as u8)
-                .unwrap();
+                .map_err(err_msg!(Error::Unknown))?;
         }
-        TransferStatus::Completed
+        Ok(TransferStatus::Completed)
     }
 
     fn claim_interfaces(&mut self) {
         for i in 0..self.get_interface_number_of_active_config() {
-            match self.device_handle.lock().unwrap().claim_interface(i) {
+            match self.device_handle.lock().claim_interface(i) {
                 Ok(()) => {
                     debug!("claimed interface {}", i);
                     self.claimed_interfaces.push(i);
@@ -409,13 +414,12 @@ impl HostDevice {
         }
     }
 
-    fn create_endpoints(&mut self) {
+    fn create_endpoints(&mut self) -> Result<()> {
         self.endpoints = Vec::new();
         let config_descriptor = match self.device.get_active_config_descriptor() {
             Err(e) => {
-                // device might be disconnected now.
-                error!("unexpected error {:?}", e);
-                return;
+                error!("device might be disconnected {:?}", e);
+                return Ok(());
             }
             Ok(descriptor) => descriptor,
         };
@@ -423,16 +427,16 @@ impl HostDevice {
             let alt_setting = self.alt_settings.get(&(*i as u16)).unwrap_or(&0);
             let interface = config_descriptor
                 .get_interface_descriptor(*i as u8, *alt_setting as i32)
-                .unwrap();
+                .ok_or(Error::Unknown)?;
             for ep_idx in 0..interface.bNumEndpoints {
-                let ep_dp = interface.endpoint_descriptor(ep_idx).unwrap();
+                let ep_dp = interface.endpoint_descriptor(ep_idx).ok_or(Error::Unknown)?;
                 let ep_num = ep_dp.get_endpoint_number();
                 if ep_num == 0 {
                     debug!("endpoint 0 in endpoint descriptors");
                     continue;
                 }
                 let direction = ep_dp.get_direction();
-                let ty = ep_dp.get_endpoint_type().unwrap();
+                let ty = ep_dp.get_endpoint_type().ok_or(Error::Unknown)?;
                 self.endpoints.push(UsbEndpoint::new(
                     self.job_queue.clone(),
                     self.device_handle.clone(),
@@ -442,31 +446,42 @@ impl HostDevice {
                 ));
             }
         }
+        Ok(())
     }
 }
 
 impl XhciBackendDevice for HostDevice {
     fn get_vid(&self) -> u16 {
-        self.device.get_device_descriptor().unwrap().idVendor
+        match self.device.get_device_descriptor() {
+            Ok(d) => d.idVendor,
+            Err(e) => {
+                error!("cannot get device descriptor {:?}", e);
+                0
+            }
+        }
     }
 
     fn get_pid(&self) -> u16 {
-        self.device.get_device_descriptor().unwrap().idProduct
+        match self.device.get_device_descriptor() {
+            Ok(d) => d.idProduct,
+            Err(e) => {
+                error!("cannot get device descriptor {:?}", e);
+                0
+            }
+        }
     }
 
-    fn submit_transfer(&mut self, transfer: XhciTransfer) {
+    fn submit_transfer(&mut self, transfer: XhciTransfer) -> Result<()> {
         if transfer.get_endpoint_number() == 0 {
-            self.handle_control_transfer(transfer);
-            return;
+            return self.handle_control_transfer(transfer);
         }
         for ep in &self.endpoints {
             if ep.match_ep(transfer.get_endpoint_number(), transfer.get_transfer_dir()) {
-                ep.handle_transfer(transfer);
-                return;
+                return ep.handle_transfer(transfer);
             }
         }
         warn!("Could not find endpoint for transfer");
-        transfer.on_transfer_complete(&TransferStatus::Error, 0);
+        transfer.on_transfer_complete(&TransferStatus::Error, 0)
     }
 
     fn set_address(&mut self, address: UsbDeviceAddress) {

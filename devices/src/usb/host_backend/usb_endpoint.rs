@@ -2,11 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use std::sync::{Arc, Mutex};
 use std::cmp;
+use std::sync::Arc;
+use sync::Mutex;
 
 use super::utils::{submit_transfer, update_state};
 use usb::async_job_queue::AsyncJobQueue;
+use usb::error::Result;
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
 use usb::xhci::xhci_transfer::{
     TransferDirection, XhciTransfer, XhciTransferState, XhciTransferType,
@@ -59,37 +61,45 @@ impl UsbEndpoint {
     }
 
     /// Handle a xhci transfer.
-    pub fn handle_transfer(&self, transfer: XhciTransfer) {
-        let buffer = match transfer.get_transfer_type() {
+    pub fn handle_transfer(&self, transfer: XhciTransfer) -> Result<()> {
+        let buffer = match transfer.get_transfer_type()? {
             XhciTransferType::Normal(buffer) => buffer,
             _ => {
                 error!("Wrong transfer type, not handled.");
-                transfer.on_transfer_complete(&TransferStatus::Error, 0);
-                return;
+                return transfer.on_transfer_complete(&TransferStatus::Error, 0);
             }
         };
 
         match self.ty {
             EndpointType::Bulk => {
-                self.handle_bulk_transfer(transfer, buffer);
+                self.handle_bulk_transfer(transfer, buffer)?;
             }
             EndpointType::Interrupt => {
-                self.handle_interrupt_transfer(transfer, buffer);
+                self.handle_interrupt_transfer(transfer, buffer)?;
             }
             _ => {
-                transfer.on_transfer_complete(&TransferStatus::Error, 0);
+                return transfer.on_transfer_complete(&TransferStatus::Error, 0);
             }
         }
+        Ok(())
     }
 
-    fn handle_bulk_transfer(&self, xhci_transfer: XhciTransfer, buffer: ScatterGatherBuffer) {
-        let usb_transfer = bulk_transfer(self.ep_addr(), 0, buffer.len());
-        self.do_handle_transfer(xhci_transfer, usb_transfer, buffer);
+    fn handle_bulk_transfer(
+        &self,
+        xhci_transfer: XhciTransfer,
+        buffer: ScatterGatherBuffer,
+    ) -> Result<()> {
+        let usb_transfer = bulk_transfer(self.ep_addr(), 0, buffer.len()?);
+        self.do_handle_transfer(xhci_transfer, usb_transfer, buffer)
     }
 
-    fn handle_interrupt_transfer(&self, xhci_transfer: XhciTransfer, buffer: ScatterGatherBuffer) {
-        let usb_transfer = interrupt_transfer(self.ep_addr(), 0, buffer.len());
-        self.do_handle_transfer(xhci_transfer, usb_transfer, buffer);
+    fn handle_interrupt_transfer(
+        &self,
+        xhci_transfer: XhciTransfer,
+        buffer: ScatterGatherBuffer,
+    ) -> Result<()> {
+        let usb_transfer = interrupt_transfer(self.ep_addr(), 0, buffer.len()?);
+        self.do_handle_transfer(xhci_transfer, usb_transfer, buffer)
     }
 
     fn do_handle_transfer(
@@ -97,34 +107,38 @@ impl UsbEndpoint {
         xhci_transfer: XhciTransfer,
         mut usb_transfer: UsbTransfer<BulkTransferBuffer>,
         buffer: ScatterGatherBuffer,
-    ) {
+    ) -> Result<()> {
         let xhci_transfer = Arc::new(xhci_transfer);
         let tmp_transfer = xhci_transfer.clone();
         match self.direction {
             EndpointDirection::HostToDevice => {
                 // Read data from ScatterGatherBuffer to a continuous memory.
-                buffer.read(usb_transfer.buffer_mut().as_mut_slice());
+                buffer.read(usb_transfer.buffer_mut().as_mut_slice())?;
                 debug!(
                     "out transfer ep_addr {:#x}, buffer len {}, data {:#x?}",
                     self.ep_addr(),
-                    buffer.len(),
+                    buffer.len()?,
                     usb_transfer.buffer_mut().as_mut_slice()
                 );
                 usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
                     debug!("out transfer callback");
-                    update_state(&xhci_transfer, &t);
-                    let state = xhci_transfer.state().lock().unwrap();
+                    update_state(&xhci_transfer, &t).unwrap();
+                    let state = xhci_transfer.state().lock();
                     match *state {
                         XhciTransferState::Cancelled => {
                             debug!("transfer has been cancelled");
                             drop(state);
-                            xhci_transfer.on_transfer_complete(&TransferStatus::Cancelled, 0);
+                            xhci_transfer
+                                .on_transfer_complete(&TransferStatus::Cancelled, 0)
+                                .unwrap();
                         }
                         XhciTransferState::Completed => {
                             let status = t.status();
                             let actual_length = t.actual_length();
                             drop(state);
-                            xhci_transfer.on_transfer_complete(&status, actual_length as u32);
+                            xhci_transfer
+                                .on_transfer_complete(&status, actual_length as u32)
+                                .unwrap();
                         }
                         _ => {
                             panic!("should not take this branch");
@@ -136,13 +150,13 @@ impl UsbEndpoint {
                     tmp_transfer,
                     &self.device_handle,
                     usb_transfer,
-                );
+                )?;
             }
             EndpointDirection::DeviceToHost => {
                 debug!(
                     "in transfer ep_addr {:#x}, buffer len {}",
                     self.ep_addr(),
-                    buffer.len()
+                    buffer.len()?
                 );
                 let addr = self.ep_addr();
                 usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
@@ -151,21 +165,25 @@ impl UsbEndpoint {
                         addr,
                         t.buffer().as_slice()
                     );
-                    update_state(&xhci_transfer, &t);
-                    let state = xhci_transfer.state().lock().unwrap();
+                    update_state(&xhci_transfer, &t).unwrap();
+                    let state = xhci_transfer.state().lock();
                     match *state {
                         XhciTransferState::Cancelled => {
                             debug!("transfer has been cancelled");
                             drop(state);
-                            xhci_transfer.on_transfer_complete(&TransferStatus::Cancelled, 0);
+                            xhci_transfer
+                                .on_transfer_complete(&TransferStatus::Cancelled, 0)
+                                .unwrap();
                         }
                         XhciTransferState::Completed => {
                             let status = t.status();
                             let actual_length = t.actual_length() as usize;
-                            let copied_length = buffer.write(t.buffer().as_slice());
+                            let copied_length = buffer.write(t.buffer().as_slice()).unwrap();
                             let actual_length = cmp::min(actual_length, copied_length);
                             drop(state);
-                            xhci_transfer.on_transfer_complete(&status, actual_length as u32);
+                            xhci_transfer
+                                .on_transfer_complete(&status, actual_length as u32)
+                                .unwrap();
                         }
                         _ => {
                             // update state is already invoked. This match should not be in any
@@ -180,8 +198,9 @@ impl UsbEndpoint {
                     tmp_transfer,
                     &self.device_handle,
                     usb_transfer,
-                );
+                )?;
             }
         }
+        Ok(())
     }
 }

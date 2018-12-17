@@ -9,7 +9,9 @@ use super::xhci_regs::{
     XhciRegs, MAX_PORTS, PORTSC_CONNECT_STATUS_CHANGE, PORTSC_CURRENT_CONNECT_STATUS,
     PORTSC_PORT_ENABLED, PORTSC_PORT_ENABLED_DISABLED_CHANGE, USB_STS_PORT_CHANGE_DETECT,
 };
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, MutexGuard};
+use sync::Mutex;
+use usb::error::Result;
 
 /// Error type for usb ports.
 pub enum Error {
@@ -44,41 +46,41 @@ impl UsbPort {
     }
 
     /// Detach current connected backend. Returns false when there is no backend connected.
-    pub fn detach(&self) -> bool {
-        let mut locked = self.backend_device.lock().unwrap();
+    pub fn detach(&self) -> Result<bool> {
+        let mut locked = self.backend_device.lock();
         if locked.is_none() {
             error!("device is already detached from this port {}", self.port_id);
-            return false;
+            return Ok(false);
         }
         debug!("device detached from port {}", self.port_id);
         *locked = None;
-        self.send_device_disconnected_event();
-        true
+        self.send_device_disconnected_event()?;
+        Ok(true)
     }
 
     /// Get current connected backend.
     pub fn get_backend_device(&self) -> MutexGuard<Option<Box<XhciBackendDevice>>> {
-        self.backend_device.lock().unwrap()
+        self.backend_device.lock()
     }
 
-    fn reset(&self) {
-        if self.backend_device.lock().unwrap().is_some() {
-            self.send_device_connected_event();
+    fn reset(&self) -> Result<()> {
+        if self.backend_device.lock().is_some() {
+            self.send_device_connected_event()?;
         }
+        Ok(())
     }
 
-    /// This method will panic if there is already a backend connected.
-    fn attach(&self, device: Box<XhciBackendDevice>) {
+    fn attach(&self, device: Box<XhciBackendDevice>) -> Result<()> {
         debug!("A backend is connected to port {}", self.port_id);
-        let mut locked = self.backend_device.lock().unwrap();
+        let mut locked = self.backend_device.lock();
         assert!(locked.is_none());
         *locked = Some(device);
-        self.send_device_connected_event();
+        self.send_device_connected_event()
     }
 
     /// Inform the guest kernel there is device connected to this port. It combines first few steps
     /// of USB device initialization process in xHCI spec 4.3.
-    pub fn send_device_connected_event(&self) {
+    pub fn send_device_connected_event(&self) -> Result<()> {
         // xHCI spec 4.3.
         self.portsc.set_bits(
             PORTSC_CURRENT_CONNECT_STATUS
@@ -89,12 +91,11 @@ impl UsbPort {
         self.usbsts.set_bits(USB_STS_PORT_CHANGE_DETECT);
         self.interrupter
             .lock()
-            .unwrap()
-            .send_port_status_change_trb(self.port_id);
+            .send_port_status_change_trb(self.port_id)
     }
 
     /// Inform the guest kernel that device has been detached.
-    pub fn send_device_disconnected_event(&self) {
+    pub fn send_device_disconnected_event(&self) -> Result<()> {
         // xHCI spec 4.3.
         self.portsc
             .set_bits(PORTSC_CONNECT_STATUS_CHANGE | PORTSC_PORT_ENABLED_DISABLED_CHANGE);
@@ -102,8 +103,7 @@ impl UsbPort {
         self.usbsts.set_bits(USB_STS_PORT_CHANGE_DETECT);
         self.interrupter
             .lock()
-            .unwrap()
-            .send_port_status_change_trb(self.port_id);
+            .send_port_status_change_trb(self.port_id)
     }
 }
 
@@ -131,11 +131,12 @@ impl UsbHub {
     }
 
     /// Reset all ports.
-    pub fn reset(&self) {
+    pub fn reset(&self) -> Result<()> {
         debug!("reseting usb hub");
         for p in &self.ports {
-            p.reset();
+            p.reset()?;
         }
+        Ok(())
     }
 
     /// Get a specific port of the hub.
@@ -151,8 +152,13 @@ impl UsbHub {
         debug!("Trying to connect backend to hub");
         for i in 0..self.ports.len() {
             if (self.ports[i].get_backend_device()).is_none() {
-                self.ports[i].attach(backend);
-                return Some((i + 1) as u8);
+                match self.ports[i].attach(backend) {
+                    Ok(()) => return Some((i + 1) as u8),
+                    Err(_) => {
+                        error!("cannot connect device to backend");
+                        return None;
+                    }
+                }
             }
         }
         None
@@ -163,6 +169,12 @@ impl UsbHub {
         if port_id == 0 || port_id > MAX_PORTS {
             return false;
         }
-        self.ports[port_id as usize - 1].detach()
+        match self.ports[port_id as usize - 1].detach() {
+            Ok(v) => v,
+            Err(e) => {
+                error!("fail to detach device from port {}. Error {:?}", port_id, e);
+                false
+            }
+        }
     }
 }

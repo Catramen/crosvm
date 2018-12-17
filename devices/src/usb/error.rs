@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-use sys_util;
-
 #[derive(Debug)]
 pub enum Error {
     /// Error happens when invoking some syscall,
@@ -68,7 +66,8 @@ mod tests {
     fn err_msg_test() {
         sys_util::syslog::init().unwrap();
         let r: std::result::Result<(), SysError> = Err(SysError::new(123));
-        r.map_err(err_msg!(Error::SysError))
+        let _ = r
+            .map_err(err_msg!(Error::SysError))
             .map_err(err_msg!())
             .map_err(err_msg!(Error::BadState))
             .map_err(err_msg!("some info"))

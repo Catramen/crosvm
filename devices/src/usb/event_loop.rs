@@ -9,6 +9,7 @@ use std::sync::{Arc, Weak};
 use std::thread;
 use sync::Mutex;
 use sys_util::{EpollContext, EpollEvents, EventFd, PollToken, WatchingEvents};
+use usb::error::{Error, Result};
 
 /// Fd is a wrapper of RawFd. It implements AsRawFd trait and PollToken trait for RawFd.
 /// It does not own the fd, thus won't close the fd when dropped.
@@ -29,9 +30,18 @@ impl PollToken for Fd {
     }
 }
 
+/// A fail handle will do the clean up when the code fail.
+pub trait FailHandle: Send + Sync {
+    /// Fail the code.
+    fn fail(&self);
+    /// Returns true if already failed.
+    fn failed(&self) -> bool;
+}
+
 /// EpollEventLoop is an event loop blocked on a set of fds. When a monitered events is triggered,
 /// event loop will invoke the mapped handler.
 pub struct EventLoop {
+    fail_handle: Arc<FailHandle>,
     poll_ctx: Arc<EpollContext<Fd>>,
     handlers: Arc<Mutex<BTreeMap<RawFd, Weak<EventHandler>>>>,
     stop_evt: EventFd,
@@ -39,15 +49,18 @@ pub struct EventLoop {
 
 /// Interface for event handler.
 pub trait EventHandler: Send + Sync {
-    fn on_event(&self, fd: RawFd);
+    fn on_event(&self, fd: RawFd) -> Result<()>;
 }
 
 impl EventLoop {
     /// Start an event loop.
-    pub fn start() -> (EventLoop, thread::JoinHandle<()>) {
+    pub fn start(fail_handle: Arc<FailHandle>) -> Option<(EventLoop, thread::JoinHandle<()>)> {
         let (self_stop_evt, stop_evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
-            Err(_e) => panic!("failed creating cmd EventFd pair"),
+            Err(_e) => {
+                error!("failed creating cmd EventFd pair");
+                return None;
+            },
         };
 
         let fd_callbacks: Arc<Mutex<BTreeMap<RawFd, Weak<EventHandler>>>> =
@@ -55,10 +68,14 @@ impl EventLoop {
         let poll_ctx: EpollContext<Fd> =
             match EpollContext::new().and_then(|pc| pc.add(&stop_evt, Fd(stop_evt.as_raw_fd())).and(Ok(pc))) {
                 Ok(pc) => pc,
-                Err(_e) => panic!("failed creating PollContext"),
+                Err(_e) => {
+                    error!("failed creating PollContext");
+                    return None;
+                },
             };
         let poll_ctx = Arc::new(poll_ctx);
         let event_loop = EventLoop {
+            fail_handle: fail_handle.clone(),
             poll_ctx: poll_ctx.clone(),
             handlers: fd_callbacks.clone(),
             stop_evt: self_stop_evt,
@@ -67,7 +84,18 @@ impl EventLoop {
         let handle = thread::spawn(move || {
             let event_loop = EpollEvents::new();
             loop {
-                let events = poll_ctx.wait(&event_loop).expect("Unable to poll");
+                if fail_handle.failed() {
+                    error!("xhci controller already failed, stopping event ring");
+                    return;
+                }
+                let events = match poll_ctx.wait(&event_loop) {
+                    Ok(events) => events,
+                    Err(e) => {
+                        error!("cannot poll {:?}", e);
+                        fail_handle.fail();
+                        return;
+                    }
+                };
                 for event in events.iter() {
                     if event.token().as_raw_fd() == stop_evt.as_raw_fd() {
                         return;
@@ -85,7 +113,14 @@ impl EventLoop {
                             Some(handler) => {
                                 // Drop lock before triggering the event.
                                 drop(locked);
-                                handler.on_event(fd);
+                                match handler.on_event(fd) {
+                                    Ok(()) => {}
+                                    Err(e) => {
+                                        error!("event loop stopping due to error {:?}", e);
+                                        fail_handle.fail();
+                                        return;
+                                    }
+                                };
                             }
                             // If the handler is already gone, we remove the fd.
                             None => {
@@ -100,32 +135,77 @@ impl EventLoop {
             }
         });
 
-        (event_loop, handle)
+        Some((event_loop, handle))
     }
 
     /// Add a new event to event loop. The event handler will be invoked when `event` happens on
-    /// `fd`.
+    /// `fd`. This function return false if it failed.
     ///
     /// If the same `fd` is added multiple times, the old handler will be replaced.
     /// EventLoop will not keep `handler` alive, if handler is dropped when `event` is triggered, the
     /// event will be removed.
-    pub fn add_event(&self, fd: &AsRawFd, events: WatchingEvents, handler: Weak<EventHandler>) {
-        self.handlers.lock().insert(fd.as_raw_fd(), handler);
+    pub fn add_event(
+        &self,
+        fd: &AsRawFd,
+        events: WatchingEvents,
+        handler: Weak<EventHandler>,
+    ) -> bool {
+        if self.fail_handle.failed() {
+            return false;
+        }
+        match self.add_event_helper(fd, events, handler) {
+            Ok(()) => true,
+            Err(_) => {
+                self.fail_handle.fail();
+                false
+            }
+        }
+    }
+
+    fn add_event_helper(
+        &self,
+        fd: &AsRawFd,
+        events: WatchingEvents,
+        handler: Weak<EventHandler>,
+    ) -> Result<()> {
+        self.handlers
+            .lock()
+            .insert(fd.as_raw_fd(), handler);
         // This might fail due to epoll syscall. Check epoll_ctl(2).
         self.poll_ctx
             .add_fd_with_events(fd, events, Fd(fd.as_raw_fd()))
-            .expect("fail to add event to epoll context");
+            .map_err(err_msg!(
+                Error::SysError,
+                "fail to add event to epoll context"
+            ))
     }
 
-    /// Removes event for this `fd`.
+    /// Removes event for this `fd`. This function returns false if it fails.
     ///
     /// EventLoop does not guarantee all events for `fd` is handled.
-    pub fn remove_event_for_fd(&self, fd: &AsRawFd) {
+    pub fn remove_event_for_fd(&self, fd: &AsRawFd) -> bool {
+        if self.fail_handle.failed() {
+            return false;
+        }
+        match self.remove_event_for_fd_helper(fd) {
+            Ok(()) => true,
+            Err(_) => {
+                self.fail_handle.fail();
+                false
+            }
+        }
+    }
+
+    fn remove_event_for_fd_helper(&self, fd: &AsRawFd) -> Result<()> {
         // This might fail due to epoll syscall. Check epoll_ctl(2).
-        self.poll_ctx
-            .delete(fd)
-            .expect("fail to delete event from epoll context");
-        self.handlers.lock().remove(&fd.as_raw_fd());
+        self.poll_ctx.delete(fd).map_err(err_msg!(
+            Error::SysError,
+            "fail to delete event from epoll context"
+        ))?;
+        self.handlers
+            .lock()
+            .remove(&fd.as_raw_fd());
+        Ok(())
     }
 
     /// Stops this event loop asynchronously. Triggered events might not be handled.
@@ -154,16 +234,26 @@ mod tests {
     }
 
     impl EventHandler for EventLoopTestHandler {
-        fn on_event(&self, fd: RawFd) {
+        fn on_event(&self, fd: RawFd) -> Result<()> {
             let _ = unsafe { EventFd::from_raw_fd(fd).read() };
             *self.val.lock().unwrap() += 1;
             self.cvar.notify_one();
+            Ok(())
+        }
+    }
+
+    struct VoidFailHandle {}
+    impl FailHandle for VoidFailHandle {
+        fn fail(&self) {}
+        fn failed(&self) -> bool {
+            false
         }
     }
 
     #[test]
     fn event_loop_test() {
-        let (l, j) = EventLoop::start();
+        let fail_handle = Arc::new(VoidFailHandle {});
+        let (l, j) = EventLoop::start(fail_handle).unwrap();
         let (self_evt, evt) = match EventFd::new().and_then(|e| Ok((e.try_clone()?, e))) {
             Ok(v) => v,
             Err(e) => {

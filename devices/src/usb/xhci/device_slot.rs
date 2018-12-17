@@ -14,9 +14,11 @@ use super::xhci_abi::{
 use super::xhci_regs::{valid_slot_id, MAX_PORTS, MAX_SLOTS};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use sync::Mutex;
 use sys_util::{GuestAddress, GuestMemory};
 use usb::auto_callback::AutoCallback;
+use usb::error::{Error, Result};
 use usb::event_loop::EventLoop;
 
 /// See spec 4.5.1 for dci.
@@ -86,7 +88,7 @@ impl DeviceSlots {
             for slot in &slots {
                 slot.reset();
             }
-            hub.reset();
+            hub.reset().unwrap();
             callback();
         });
         self.stop_all(auto_callback);
@@ -102,15 +104,23 @@ impl DeviceSlots {
 
     /// Disable a slot. This might happen asynchronously, if there is any pending transfers. The
     /// callback will be invoked when slot is actually disabled.
-    pub fn disable_slot<C: FnMut(TrbCompletionCode) + 'static + Send>(&self, slot_id: u8, cb: C) {
+    pub fn disable_slot<C: FnMut(TrbCompletionCode) + 'static + Send>(
+        &self,
+        slot_id: u8,
+        cb: C,
+    ) -> Result<()> {
         debug!("device slot {} is being disabled", slot_id);
-        DeviceSlot::disable(&self.slots[slot_id as usize - 1], cb);
+        DeviceSlot::disable(&self.slots[slot_id as usize - 1], cb)
     }
 
     /// Reset a slot. This is a shortcut call for DeviceSlot::reset_slot.
-    pub fn reset_slot<C: FnMut(TrbCompletionCode) + 'static + Send>(&self, slot_id: u8, cb: C) {
+    pub fn reset_slot<C: FnMut(TrbCompletionCode) + 'static + Send>(
+        &self,
+        slot_id: u8,
+        cb: C,
+    ) -> Result<()> {
         debug!("device slot {} is resetting", slot_id);
-        DeviceSlot::reset_slot(&self.slots[slot_id as usize - 1], cb);
+        DeviceSlot::reset_slot(&self.slots[slot_id as usize - 1], cb)
     }
 }
 
@@ -122,24 +132,26 @@ impl PortId {
         PortId(Mutex::new(0))
     }
 
-    fn set(&self, value: u8) {
+    fn set(&self, value: u8) -> Result<()> {
         if value < 1 || value > MAX_PORTS {
-            // TODO(jkwang) not panic, stop xhci controller.
-            panic!("attempting to set invalid port id");
+            error!("attempting to set invalid port id");
+            return Err(Error::BadState);
         }
-        *self.0.lock().unwrap() = value;
+        *self.0.lock() = value;
+        Ok(())
     }
 
     fn reset(&self) {
-        *self.0.lock().unwrap() = 0;
+        *self.0.lock() = 0;
     }
 
-    fn get(&self) -> u8 {
-        let val = *self.0.lock().unwrap();
+    fn get(&self) -> Result<(u8)> {
+        let val = *self.0.lock();
         if val == 0 {
-            panic!("attempting to use invalid port id");
+            error!("attempting to use invalid port id");
+            return Err(Error::BadState);
         }
-        val
+        Ok(val)
     }
 }
 
@@ -180,17 +192,17 @@ impl DeviceSlot {
     }
 
     fn get_trc(&self, i: usize) -> Option<Arc<TransferRingController>> {
-        let trcs = self.transfer_ring_controllers.lock().unwrap();
+        let trcs = self.transfer_ring_controllers.lock();
         trcs[i].clone()
     }
 
     fn set_trc(&self, i: usize, trc: Option<Arc<TransferRingController>>) {
-        let mut trcs = self.transfer_ring_controllers.lock().unwrap();
+        let mut trcs = self.transfer_ring_controllers.lock();
         trcs[i] = trc;
     }
 
     fn trc_len(&self) -> usize {
-        self.transfer_ring_controllers.lock().unwrap().len()
+        self.transfer_ring_controllers.lock().len()
     }
 
     /// The arguments are identical to the fields in each doorbell register. The
@@ -207,13 +219,13 @@ impl DeviceSlot {
     /// The stream ID must be zero for endpoints that do not have streams
     /// configured.
     /// This function will return false if it fails to trigger transfer ring start.
-    pub fn ring_doorbell(&self, target: u8, _stream_id: u16) -> bool {
+    pub fn ring_doorbell(&self, target: u8, _stream_id: u16) -> Result<bool> {
         if !valid_endpoint_id(target) {
             error!(
                 "device slot {}: Invalid target written to doorbell register. target: {}",
                 self.slot_id, target
             );
-            return false;
+            return Ok(false);
         }
         debug!(
             "device slot {}: ding-dong. who is that? target = {}",
@@ -225,20 +237,20 @@ impl DeviceSlot {
             Some(tr) => tr,
             None => {
                 error!("Device endpoint is not inited");
-                return false;
+                return Ok(false);
             }
         };
-        let context = self.get_device_context();
+        let context = self.get_device_context()?;
         // TODO(jkwang) Refactor the code to have bitfield return enum.
         if context.endpoint_context[endpoint_index].get_endpoint_state()
             == EndpointState::Running as u8
         {
             debug!("endpoint is started, start transfer ring");
-            transfer_ring_controller.start();
+            transfer_ring_controller.start()?;
         } else {
             error!("doorbell rung when endpoint is not started");
         }
-        true
+        Ok(true)
     }
 
     /// Enable the slot. This function returns false if it's already enabled.
@@ -257,18 +269,18 @@ impl DeviceSlot {
     pub fn disable<C: FnMut(TrbCompletionCode) + 'static + Send>(
         slot: &Arc<DeviceSlot>,
         mut callback: C,
-    ) {
+    ) -> Result<()> {
         if slot.enabled.load(Ordering::SeqCst) {
             let slot_weak = Arc::downgrade(slot);
             let auto_callback = AutoCallback::new(move || {
                 // Slot should still be alive when the callback is invoked. If it's not, there must
                 // be a bug somewhere.
                 let slot = slot_weak.upgrade().unwrap();
-                let mut device_context = slot.get_device_context();
+                let mut device_context = slot.get_device_context().unwrap();
                 device_context
                     .slot_context
                     .set_state(DeviceSlotState::DisabledOrEnabled);
-                slot.set_device_context(device_context);
+                slot.set_device_context(device_context).unwrap();
                 slot.reset();
                 debug!(
                     "device slot {}: all trc disabled, sending trb",
@@ -277,28 +289,30 @@ impl DeviceSlot {
                 callback(TrbCompletionCode::Success);
             });
             slot.stop_all_trc(auto_callback);
+            Ok(())
         } else {
             callback(TrbCompletionCode::SlotNotEnabledError);
+            Ok(())
         }
     }
 
     // Assigns the device address and initializes slot and endpoint 0 context.
-    pub fn set_address(&self, trb: &AddressDeviceCommandTrb) -> TrbCompletionCode {
+    pub fn set_address(&self, trb: &AddressDeviceCommandTrb) -> Result<TrbCompletionCode> {
         if !self.enabled.load(Ordering::SeqCst) {
             error!(
                 "trying to set address to a disabled device slot {}",
                 self.slot_id
             );
-            return TrbCompletionCode::SlotNotEnabledError;
+            return Ok(TrbCompletionCode::SlotNotEnabledError);
         }
-        let device_context = self.get_device_context();
-        let state = device_context.slot_context.state().unwrap();
+        let device_context = self.get_device_context()?;
+        let state = device_context.slot_context.state().ok_or(Error::BadState)?;
         match state {
             DeviceSlotState::DisabledOrEnabled => {}
             DeviceSlotState::Default if trb.get_block_set_address_request() == 0 => {}
             _ => {
                 error!("slot {} has unexpected slot state", self.slot_id);
-                return TrbCompletionCode::ContextStateError;
+                return Ok(TrbCompletionCode::ContextStateError);
             }
         }
 
@@ -306,14 +320,14 @@ impl DeviceSlot {
         // to the output context.
         let input_context_ptr = GuestAddress(trb.get_input_context_pointer());
         // Copy slot context.
-        self.copy_context(input_context_ptr, 0);
+        self.copy_context(input_context_ptr, 0)?;
         // Copy control endpoint context.
-        self.copy_context(input_context_ptr, 1);
+        self.copy_context(input_context_ptr, 1)?;
 
         // Read back device context.
-        let mut device_context = self.get_device_context();
+        let mut device_context = self.get_device_context()?;
         let port_id = device_context.slot_context.get_root_hub_port_number();
-        self.port_id.set(port_id);
+        self.port_id.set(port_id)?;
         debug!(
             "port id {} is assigned to slot id {}",
             port_id, self.slot_id
@@ -324,7 +338,7 @@ impl DeviceSlot {
             0,
             Some(TransferRingController::new(
                 self.mem.clone(),
-                self.hub.get_port(port_id).unwrap(),
+                self.hub.get_port(port_id).ok_or(Error::BadState)?,
                 self.event_loop.clone(),
                 self.interrupter.clone(),
                 self.slot_id,
@@ -338,13 +352,13 @@ impl DeviceSlot {
                 .slot_context
                 .set_state(DeviceSlotState::Default);
         } else {
-            let port = self.hub.get_port(port_id).unwrap();
+            let port = self.hub.get_port(port_id).ok_or(Error::BadState)?;
             match *port.get_backend_device() {
                 Some(ref mut backend) => {
                     backend.set_address(self.slot_id as u32);
                 }
                 None => {
-                    return TrbCompletionCode::TransactionError;
+                    return Ok(TrbCompletionCode::TransactionError);
                 }
             }
 
@@ -357,22 +371,29 @@ impl DeviceSlot {
         }
 
         // TODO(jkwang) trc should always exists. Fix this.
-        self.get_trc(0).unwrap().set_dequeue_pointer(GuestAddress(
-            device_context.endpoint_context[0].get_tr_dequeue_pointer() << 4,
-        ));
+        self.get_trc(0)
+            .ok_or(Error::BadState)?
+            .set_dequeue_pointer(GuestAddress(
+                device_context.endpoint_context[0].get_tr_dequeue_pointer() << 4,
+            ));
 
-        self.get_trc(0).unwrap().set_consumer_cycle_state(
-            device_context.endpoint_context[0].get_dequeue_cycle_state() > 0,
-        );
+        self.get_trc(0)
+            .ok_or(Error::BadState)?
+            .set_consumer_cycle_state(
+                device_context.endpoint_context[0].get_dequeue_cycle_state() > 0,
+            );
 
         debug!("Setting endpoint 0 to running");
         device_context.endpoint_context[0].set_state(EndpointState::Running);
-        self.set_device_context(device_context);
-        TrbCompletionCode::Success
+        self.set_device_context(device_context)?;
+        Ok(TrbCompletionCode::Success)
     }
 
     // Adds or drops multiple endpoints in the device slot.
-    pub fn configure_endpoint(&self, trb: &ConfigureEndpointCommandTrb) -> TrbCompletionCode {
+    pub fn configure_endpoint(
+        &self,
+        trb: &ConfigureEndpointCommandTrb,
+    ) -> Result<TrbCompletionCode> {
         debug!("configuring endpoint");
         let input_control_context = if trb.get_deconfigure() > 0 {
             // From section 4.6.6 of the xHCI spec:
@@ -386,39 +407,39 @@ impl DeviceSlot {
         } else {
             self.mem
                 .read_obj_from_addr(GuestAddress(trb.get_input_context_pointer()))
-                .unwrap()
+                .map_err(err_msg!(Error::BadState))?
         };
 
         for device_context_index in 1..DCI_INDEX_END {
             if input_control_context.drop_context_flag(device_context_index) {
-                self.drop_one_endpoint(device_context_index);
+                self.drop_one_endpoint(device_context_index)?;
             }
             if input_control_context.add_context_flag(device_context_index) {
                 self.copy_context(
                     GuestAddress(trb.get_input_context_pointer()),
                     device_context_index,
-                );
-                self.add_one_endpoint(device_context_index);
+                )?;
+                self.add_one_endpoint(device_context_index)?;
             }
         }
 
         if trb.get_deconfigure() > 0 {
-            self.set_state(DeviceSlotState::Addressed);
+            self.set_state(DeviceSlotState::Addressed)?;
         } else {
-            self.set_state(DeviceSlotState::Configured);
+            self.set_state(DeviceSlotState::Configured)?;
         }
-        TrbCompletionCode::Success
+        Ok(TrbCompletionCode::Success)
     }
 
     // Evaluates the device context by reading new values for certain fields of
     // the slot context and/or control endpoint context.
-    pub fn evaluate_context(&self, trb: &EvaluateContextCommandTrb) -> TrbCompletionCode {
+    pub fn evaluate_context(&self, trb: &EvaluateContextCommandTrb) -> Result<TrbCompletionCode> {
         if !self.enabled.load(Ordering::SeqCst) {
-            return TrbCompletionCode::SlotNotEnabledError;
+            return Ok(TrbCompletionCode::SlotNotEnabledError);
         }
 
-        let device_context = self.get_device_context();
-        let state = device_context.slot_context.state().unwrap();
+        let device_context = self.get_device_context()?;
+        let state = device_context.slot_context.state().ok_or(Error::BadState)?;
         if state == DeviceSlotState::Default
             || state == DeviceSlotState::Addressed
             || state == DeviceSlotState::Configured
@@ -427,7 +448,7 @@ impl DeviceSlot {
                 "wrong context state on evaluate context. state = {:?}",
                 state
             );
-            return TrbCompletionCode::ContextStateError;
+            return Ok(TrbCompletionCode::ContextStateError);
         }
 
         // TODO(jkwang) verify this
@@ -436,16 +457,16 @@ impl DeviceSlot {
         let input_control_context: InputControlContext = self
             .mem
             .read_obj_from_addr(GuestAddress(trb.get_input_context_pointer()))
-            .unwrap();
+            .map_err(err_msg!(Error::BadState))?;
 
-        let mut device_context = self.get_device_context();
+        let mut device_context = self.get_device_context()?;
         if input_control_context.add_context_flag(0) {
             let input_slot_context: SlotContext = self
                 .mem
                 .read_obj_from_addr(GuestAddress(
                     trb.get_input_context_pointer() + DEVICE_CONTEXT_ENTRY_SIZE as u64,
                 ))
-                .unwrap();
+                .map_err(err_msg!(Error::BadState))?;
             device_context
                 .slot_context
                 .set_interrupter_target(input_slot_context.get_interrupter_target());
@@ -463,12 +484,12 @@ impl DeviceSlot {
                 .read_obj_from_addr(GuestAddress(
                     trb.get_input_context_pointer() + 2 * DEVICE_CONTEXT_ENTRY_SIZE as u64,
                 ))
-                .unwrap();
+                .map_err(err_msg!(Error::BadState))?;
             device_context.endpoint_context[0]
                 .set_max_packet_size(ep0_context.get_max_packet_size());
         }
-        self.set_device_context(device_context);
-        TrbCompletionCode::Success
+        self.set_device_context(device_context)?;
+        Ok(TrbCompletionCode::Success)
     }
 
     /// Reset the device slot to default state and deconfigures all but the
@@ -476,28 +497,29 @@ impl DeviceSlot {
     pub fn reset_slot<C: FnMut(TrbCompletionCode) + 'static + Send>(
         slot: &Arc<DeviceSlot>,
         mut callback: C,
-    ) {
-        let state = slot.state();
+    ) -> Result<()> {
+        let state = slot.state()?;
         if state != DeviceSlotState::Addressed && state != DeviceSlotState::Configured {
             error!("reset slot failed due to context state error {:?}", state);
             callback(TrbCompletionCode::ContextStateError);
-            return;
+            return Ok(());
         }
 
         let weak_s = Arc::downgrade(&slot);
         let auto_callback = AutoCallback::new(move || {
             let s = weak_s.upgrade().unwrap();
             for i in FIRST_TRANSFER_ENDPOINT_DCI..DCI_INDEX_END {
-                s.drop_one_endpoint(i);
+                s.drop_one_endpoint(i).unwrap();
             }
-            let mut ctx = s.get_device_context();
+            let mut ctx = s.get_device_context().unwrap();
             ctx.slot_context.set_state(DeviceSlotState::Default);
             ctx.slot_context.set_context_entries(1);
             ctx.slot_context.set_root_hub_port_number(0);
-            s.set_device_context(ctx);
+            s.set_device_context(ctx).unwrap();
             callback(TrbCompletionCode::Success);
         });
         slot.stop_all_trc(auto_callback);
+        Ok(())
     }
 
     /// Stop all transfer ring controllers.
@@ -527,7 +549,7 @@ impl DeviceSlot {
                 let auto_cb = AutoCallback::new(move || {
                     cb(TrbCompletionCode::Success);
                 });
-                trc.stop(auto_cb)
+                trc.stop(auto_cb);
             }
             None => {
                 error!("endpoint at index {} is not started", index);
@@ -567,16 +589,18 @@ impl DeviceSlot {
         self.port_id.reset();
     }
 
-    fn add_one_endpoint(&self, device_context_index: u8) {
+    fn add_one_endpoint(&self, device_context_index: u8) -> Result<()> {
         debug!(
             "adding one endpoint, device context index {}",
             device_context_index
         );
-        let mut device_context = self.get_device_context();
+        let mut device_context = self.get_device_context()?;
         let transfer_ring_index = (device_context_index - 1) as usize;
         let trc = TransferRingController::new(
             self.mem.clone(),
-            self.hub.get_port(self.port_id.get()).unwrap(),
+            self.hub
+                .get_port(self.port_id.get()?)
+                .ok_or(Error::BadState)?,
             self.event_loop.clone(),
             self.interrupter.clone(),
             self.slot_id,
@@ -590,72 +614,72 @@ impl DeviceSlot {
         );
         self.set_trc(transfer_ring_index, Some(trc));
         device_context.endpoint_context[transfer_ring_index].set_state(EndpointState::Running);
-        self.set_device_context(device_context);
+        self.set_device_context(device_context)
     }
 
-    fn drop_one_endpoint(&self, device_context_index: u8) {
+    fn drop_one_endpoint(&self, device_context_index: u8) -> Result<()> {
         let endpoint_index = (device_context_index - 1) as usize;
         self.set_trc(endpoint_index, None);
-        let mut ctx = self.get_device_context();
+        let mut ctx = self.get_device_context()?;
         ctx.endpoint_context[endpoint_index].set_state(EndpointState::Disabled);
-        self.set_device_context(ctx);
+        self.set_device_context(ctx)
     }
 
-    fn get_device_context(&self) -> DeviceContext {
+    fn get_device_context(&self) -> Result<DeviceContext> {
         self.mem
-            .read_obj_from_addr(self.get_device_context_addr())
-            .unwrap()
+            .read_obj_from_addr(self.get_device_context_addr()?)
+            .map_err(err_msg!(Error::BadState))
     }
 
-    fn set_device_context(&self, device_context: DeviceContext) {
+    fn set_device_context(&self, device_context: DeviceContext) -> Result<()> {
         self.mem
-            .write_obj_at_addr(device_context, self.get_device_context_addr())
-            .unwrap();
+            .write_obj_at_addr(device_context, self.get_device_context_addr()?)
+            .map_err(err_msg!(Error::BadState))
     }
 
-    fn copy_context(&self, input_context_ptr: GuestAddress, device_context_index: u8) {
+    fn copy_context(
+        &self,
+        input_context_ptr: GuestAddress,
+        device_context_index: u8,
+    ) -> Result<()> {
         // Note that it could be slot context or device context. They have the same size. Won't
         // make a difference here.
         let ctx: EndpointContext = self
             .mem
-            .read_obj_from_addr(
-                input_context_ptr
-                    .checked_add(
-                        (device_context_index as u64 + 1) * DEVICE_CONTEXT_ENTRY_SIZE as u64,
-                    )
-                    .unwrap(),
-            )
-            .unwrap();
+            .read_obj_from_addr(input_context_ptr
+                .checked_add((device_context_index as u64 + 1) * DEVICE_CONTEXT_ENTRY_SIZE as u64)
+                .ok_or(Error::BadState)?)
+            .map_err(err_msg!(Error::BadState))?;
         debug!("context being copied {:?}", ctx);
         self.mem
             .write_obj_at_addr(
                 ctx,
-                self.get_device_context_addr()
+                self.get_device_context_addr()?
                     .checked_add(device_context_index as u64 * DEVICE_CONTEXT_ENTRY_SIZE as u64)
-                    .unwrap(),
+                    .ok_or(Error::BadState)?,
             )
-            .unwrap();
+            .map_err(err_msg!(Error::BadState))
     }
 
-    fn get_device_context_addr(&self) -> GuestAddress {
+    fn get_device_context_addr(&self) -> Result<GuestAddress> {
         let addr: u64 = self
             .mem
             .read_obj_from_addr(GuestAddress(
                 self.dcbaap.get_value() + size_of::<u64>() as u64 * self.slot_id as u64,
             ))
-            .unwrap();
-        GuestAddress(addr)
+            .map_err(err_msg!(Error::BadState))?;
+        Ok(GuestAddress(addr))
     }
 
     // Returns the current state of the device slot.
-    fn state(&self) -> DeviceSlotState {
-        let context = self.get_device_context();
-        context.slot_context.state().unwrap()
+    fn state(&self) -> Result<DeviceSlotState> {
+        let context = self.get_device_context()?;
+        context.slot_context.state().ok_or(Error::BadState)
     }
 
-    fn set_state(&self, state: DeviceSlotState) {
-        let mut ctx = self.get_device_context();
+    fn set_state(&self, state: DeviceSlotState) -> Result<()> {
+        let mut ctx = self.get_device_context()?;
         ctx.slot_context.set_state(state);
-        self.set_device_context(ctx);
+        self.set_device_context(ctx)
     }
 }

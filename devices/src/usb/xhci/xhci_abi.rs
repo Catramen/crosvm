@@ -5,6 +5,7 @@
 pub use super::xhci_abi_schema::*;
 use data_model::DataInit;
 use std;
+use usb::error::{Error, Result};
 
 unsafe impl DataInit for Trb {}
 unsafe impl DataInit for NormalTrb {}
@@ -143,36 +144,34 @@ impl TypedTrb for PortStatusChangeEventTrb {
 /// All trb structs have the same size. One trb could be safely casted to another, though the
 /// values might be invalid.
 pub unsafe trait TrbCast: DataInit + TypedTrb {
-    fn cast<T: TrbCast>(&self) -> &T {
-        T::from_slice(self.as_slice()).unwrap()
+    fn cast<T: TrbCast>(&self) -> Result<&T> {
+        T::from_slice(self.as_slice()).ok_or(Error::Unknown)
     }
 
-    fn cast_mut<T: TrbCast>(&mut self) -> &mut T {
-        T::from_mut_slice(self.as_mut_slice()).unwrap()
+    fn cast_mut<T: TrbCast>(&mut self) -> Result<&mut T> {
+        T::from_mut_slice(self.as_mut_slice()).ok_or(Error::Unknown)
     }
 
-    fn checked_cast<T: TrbCast>(&self) -> Option<&T> {
+    fn checked_cast<T: TrbCast>(&self) -> Result<&T> {
         if Trb::from_slice(self.as_slice())
-            .unwrap()
+            .ok_or(Error::Unknown)?
             .trb_type()
-            .unwrap()
-            != T::TY
+            .ok_or(Error::BadState)? != T::TY
         {
-            return None;
+            return Err(Error::BadState);
         }
-        Some(T::from_slice(self.as_slice()).unwrap())
+        T::from_slice(self.as_slice()).ok_or(Error::BadState)
     }
 
-    fn checked_mut_cast<T: TrbCast>(&mut self) -> Option<&mut T> {
+    fn checked_mut_cast<T: TrbCast>(&mut self) -> Result<&mut T> {
         if Trb::from_slice(self.as_slice())
-            .unwrap()
+            .ok_or(Error::Unknown)?
             .trb_type()
-            .unwrap()
-            != T::TY
+            .ok_or(Error::BadState)? != T::TY
         {
-            return None;
+            return Err(Error::BadState);
         }
-        Some(T::from_mut_slice(self.as_mut_slice()).unwrap())
+        T::from_mut_slice(self.as_mut_slice()).ok_or(Error::BadState)
     }
 }
 
@@ -192,81 +191,138 @@ impl Trb {
         match trb_type {
             TrbType::Reserved => format!("reserved trb type"),
             TrbType::Normal => {
-                let t = self.cast::<NormalTrb>();
+                let t = match self.cast::<NormalTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::SetupStage => {
-                let t = self.cast::<SetupStageTrb>();
+                let t = match self.cast::<SetupStageTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::DataStage => {
-                let t = self.cast::<DataStageTrb>();
+                let t = match self.cast::<DataStageTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::StatusStage => {
-                let t = self.cast::<StatusStageTrb>();
+                let t = match self.cast::<StatusStageTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::Isoch => {
-                let t = self.cast::<IsochTrb>();
+                let t = match self.cast::<IsochTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::Link => {
-                let t = self.cast::<LinkTrb>();
+                let t = match self.cast::<LinkTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::EventData => {
-                let t = self.cast::<EventDataTrb>();
+                let t = match self.cast::<EventDataTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::Noop => {
-                let t = self.cast::<NoopTrb>();
+                let t = match self.cast::<NoopTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::EnableSlotCommand => format!("trb: enable slot command {:?}", self),
             TrbType::DisableSlotCommand => {
-                let t = self.cast::<DisableSlotCommandTrb>();
+                let t = match self.cast::<DisableSlotCommandTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::AddressDeviceCommand => {
-                let t = self.cast::<AddressDeviceCommandTrb>();
+                let t = match self.cast::<AddressDeviceCommandTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::ConfigureEndpointCommand => {
-                let t = self.cast::<ConfigureEndpointCommandTrb>();
+                let t = match self.cast::<ConfigureEndpointCommandTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::EvaluateContextCommand => {
-                let t = self.cast::<EvaluateContextCommandTrb>();
+                let t = match self.cast::<EvaluateContextCommandTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::ResetEndpointCommand => {
-                let t = self.cast::<ResetEndpointCommandTrb>();
+                let t = match self.cast::<ResetEndpointCommandTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::StopEndpointCommand => {
-                let t = self.cast::<StopEndpointCommandTrb>();
+                let t = match self.cast::<StopEndpointCommandTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::SetTRDequeuePointerCommand => {
-                let t = self.cast::<SetTRDequeuePointerCommandTrb>();
+                let t = match self.cast::<SetTRDequeuePointerCommandTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::ResetDeviceCommand => {
-                let t = self.cast::<ResetDeviceCommandTrb>();
+                let t = match self.cast::<ResetDeviceCommandTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::NoopCommand => format!("trb: noop command {:?}", self),
             TrbType::TransferEvent => {
-                let t = self.cast::<TransferEventTrb>();
+                let t = match self.cast::<TransferEventTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::CommandCompletionEvent => {
-                let t = self.cast::<CommandCompletionEventTrb>();
+                let t = match self.cast::<CommandCompletionEventTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
             TrbType::PortStatusChangeEvent => {
-                let t = self.cast::<PortStatusChangeEventTrb>();
+                let t = match self.cast::<PortStatusChangeEventTrb>() {
+                    Ok(t) => t,
+                    Err(_) => return format!("cannot cast trb"),
+                };
                 format!("trb: {:?}", t)
             }
         }
@@ -286,17 +342,17 @@ impl Trb {
     }
 
     /// Get chain bit.
-    pub fn get_chain_bit(&self) -> bool {
-        match self.trb_type() {
-            Some(TrbType::Normal) => self.cast::<NormalTrb>().get_chain() != 0,
-            Some(TrbType::DataStage) => self.cast::<DataStageTrb>().get_chain() != 0,
-            Some(TrbType::StatusStage) => self.cast::<StatusStageTrb>().get_chain() != 0,
-            Some(TrbType::Isoch) => self.cast::<IsochTrb>().get_chain() != 0,
-            Some(TrbType::Noop) => self.cast::<NoopTrb>().get_chain() != 0,
-            Some(TrbType::Link) => self.cast::<LinkTrb>().get_chain() != 0,
-            Some(TrbType::EventData) => self.cast::<EventDataTrb>().get_chain() != 0,
+    pub fn get_chain_bit(&self) -> Result<bool> {
+        Ok(match self.trb_type() {
+            Some(TrbType::Normal) => self.cast::<NormalTrb>()?.get_chain() != 0,
+            Some(TrbType::DataStage) => self.cast::<DataStageTrb>()?.get_chain() != 0,
+            Some(TrbType::StatusStage) => self.cast::<StatusStageTrb>()?.get_chain() != 0,
+            Some(TrbType::Isoch) => self.cast::<IsochTrb>()?.get_chain() != 0,
+            Some(TrbType::Noop) => self.cast::<NoopTrb>()?.get_chain() != 0,
+            Some(TrbType::Link) => self.cast::<LinkTrb>()?.get_chain() != 0,
+            Some(TrbType::EventData) => self.cast::<EventDataTrb>()?.get_chain() != 0,
             _ => false,
-        }
+        })
     }
 
     /// Get interrupt target.
@@ -306,8 +362,8 @@ impl Trb {
     }
 
     /// Only some of trb types could appear in transfer ring.
-    pub fn can_be_in_transfer_ring(&self) -> bool {
-        match self.trb_type().unwrap() {
+    pub fn can_be_in_transfer_ring(&self) -> Result<bool> {
+        match self.trb_type().ok_or(Error::BadState)? {
             TrbType::Normal
             | TrbType::SetupStage
             | TrbType::DataStage
@@ -315,19 +371,19 @@ impl Trb {
             | TrbType::Isoch
             | TrbType::Link
             | TrbType::EventData
-            | TrbType::Noop => true,
-            _ => false,
+            | TrbType::Noop => Ok(true),
+            _ => Ok(false),
         }
     }
 
     /// Length of this transfer.
-    pub fn transfer_length(&self) -> u32 {
+    pub fn transfer_length(&self) -> Result<u32> {
         const STATUS_TRANSFER_LENGTH_MASK: u32 = 0x1ffff;
-        match self.trb_type().unwrap() {
+        match self.trb_type().ok_or(Error::BadState)? {
             TrbType::Normal | TrbType::SetupStage | TrbType::DataStage | TrbType::Isoch => {
-                self.get_status() & STATUS_TRANSFER_LENGTH_MASK
+                Ok(self.get_status() & STATUS_TRANSFER_LENGTH_MASK)
             }
-            _ => 0,
+            _ => Ok(0),
         }
     }
 
@@ -338,13 +394,13 @@ impl Trb {
     }
 
     /// Returns true if this trb is immediate data.
-    pub fn immediate_data(&self) -> bool {
+    pub fn immediate_data(&self) -> Result<bool> {
         const FLAGS_IMMEDIATE_DATA_MASK: u16 = 0x20;
-        match self.trb_type().unwrap() {
+        match self.trb_type().ok_or(Error::BadState)? {
             TrbType::Normal | TrbType::SetupStage | TrbType::DataStage | TrbType::Isoch => {
-                (self.get_flags() & FLAGS_IMMEDIATE_DATA_MASK) != 0
+                Ok((self.get_flags() & FLAGS_IMMEDIATE_DATA_MASK) != 0)
             }
-            _ => false,
+            _ => Ok(false),
         }
     }
 }
