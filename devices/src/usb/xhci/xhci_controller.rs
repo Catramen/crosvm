@@ -21,6 +21,11 @@ use usb::xhci::xhci::Xhci;
 use usb::xhci::xhci_backend_device_provider::XhciBackendDeviceProvider;
 use usb::xhci::xhci_regs::{init_xhci_mmio_space_and_regs, XhciRegs};
 
+use libc::{pid_t, dup2};
+use std::fs::File;
+use std::os::unix::io::AsRawFd;
+use std::process;
+
 const XHCI_BAR0_SIZE: u64 = 0x10000;
 
 #[derive(Clone, Copy)]
@@ -279,6 +284,12 @@ impl PciDevice for XhciController {
         }
     }
     fn on_device_sandboxed(&mut self) {
+        unsafe {
+            let pid = process::id();
+            let mut file = File::create(format!("{}_stderr.txt", pid)).unwrap();
+            let fd = file.as_raw_fd();
+            dup2(fd, 2);
+        }
         self.init_when_forked();
     }
 }
