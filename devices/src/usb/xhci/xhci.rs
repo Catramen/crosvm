@@ -56,9 +56,10 @@ impl Xhci {
         let hub = Arc::new(UsbHub::new(&regs, interrupter.clone()));
 
         let mut device_provider = device_provider;
-        device_provider.start(event_loop.clone(), hub.clone())?;
+        device_provider.start(fail_handle.clone(), event_loop.clone(), hub.clone())?;
 
         let device_slots = DeviceSlots::new(
+            fail_handle.clone(),
             regs.dcbaap.clone(),
             hub.clone(),
             interrupter.clone(),
@@ -304,8 +305,9 @@ impl Xhci {
     fn erdp_callback(&self, value: u64) -> Result<()> {
         debug!("xhci_controller: write to erdp {:x}", value);
         let mut interrupter = self.interrupter.lock();
-        interrupter
-            .set_event_ring_dequeue_pointer(GuestAddress(value & ERDP_EVENT_RING_DEQUEUE_POINTER))?;
+        interrupter.set_event_ring_dequeue_pointer(GuestAddress(
+            value & ERDP_EVENT_RING_DEQUEUE_POINTER,
+        ))?;
         interrupter.set_event_handler_busy((value & ERDP_EVENT_HANDLER_BUSY) > 0)
     }
 

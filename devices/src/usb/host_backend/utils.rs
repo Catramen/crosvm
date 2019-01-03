@@ -8,6 +8,8 @@ use sync::Mutex;
 
 use usb::async_job_queue::AsyncJobQueue;
 use usb::error::{Error, Result};
+use usb::event_loop::FailHandle;
+use usb::xhci::xhci_controller::XhciFailHandle;
 use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferState};
 use usb_util::device_handle::DeviceHandle;
 use usb_util::usb_transfer::{TransferStatus, UsbTransfer, UsbTransferBuffer};
@@ -41,6 +43,7 @@ pub fn update_state<T: UsbTransferBuffer>(
 }
 /// Helper function to submit usb_transfer to device handle.
 pub fn submit_transfer<T: UsbTransferBuffer>(
+    fail_handle: Arc<XhciFailHandle>,
     job_queue: &Arc<AsyncJobQueue>,
     xhci_transfer: Arc<XhciTransfer>,
     device_handle: &Arc<Mutex<DeviceHandle>>,
@@ -87,9 +90,13 @@ pub fn submit_transfer<T: UsbTransferBuffer>(
     };
     // We are holding locks to of backends, we want to call on_transfer_complete
     // without any lock.
-    job_queue.queue_job(move || {
-        xhci_transfer
-            .on_transfer_complete(&transfer_status, 0)
-            .unwrap();
-    })
+    job_queue.queue_job(
+        move || match xhci_transfer.on_transfer_complete(&transfer_status, 0) {
+            Ok(_) => {}
+            Err(e) => {
+                error!("transfer complete failed {:?}", e);
+                fail_handle.fail();
+            }
+        },
+    )
 }

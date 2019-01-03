@@ -8,8 +8,10 @@ use sync::Mutex;
 
 use super::utils::{submit_transfer, update_state};
 use usb::async_job_queue::AsyncJobQueue;
-use usb::error::Result;
+use usb::error::{Error, Result};
+use usb::event_loop::FailHandle;
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
+use usb::xhci::xhci_controller::XhciFailHandle;
 use usb::xhci::xhci_transfer::{
     TransferDirection, XhciTransfer, XhciTransferState, XhciTransferType,
 };
@@ -21,6 +23,7 @@ use usb_util::usb_transfer::{
 
 /// Isochronous, Bulk or Interrupt endpoint.
 pub struct UsbEndpoint {
+    fail_handle: Arc<XhciFailHandle>,
     job_queue: Arc<AsyncJobQueue>,
     device_handle: Arc<Mutex<DeviceHandle>>,
     endpoint_number: u8,
@@ -31,6 +34,7 @@ pub struct UsbEndpoint {
 impl UsbEndpoint {
     /// Create new endpoing. This function will panic if endpoint type is control.
     pub fn new(
+        fail_handle: Arc<XhciFailHandle>,
         job_queue: Arc<AsyncJobQueue>,
         device_handle: Arc<Mutex<DeviceHandle>>,
         endpoint_number: u8,
@@ -39,6 +43,7 @@ impl UsbEndpoint {
     ) -> UsbEndpoint {
         assert!(ty != EndpointType::Control);
         UsbEndpoint {
+            fail_handle,
             job_queue,
             device_handle,
             endpoint_number,
@@ -120,32 +125,40 @@ impl UsbEndpoint {
                     buffer.len()?,
                     usb_transfer.buffer_mut().as_mut_slice()
                 );
-                usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
+                let callback = move |t: UsbTransfer<BulkTransferBuffer>| {
                     debug!("out transfer callback");
-                    update_state(&xhci_transfer, &t).unwrap();
+                    update_state(&xhci_transfer, &t)?;
                     let state = xhci_transfer.state().lock();
                     match *state {
                         XhciTransferState::Cancelled => {
                             debug!("transfer has been cancelled");
                             drop(state);
-                            xhci_transfer
-                                .on_transfer_complete(&TransferStatus::Cancelled, 0)
-                                .unwrap();
+                            xhci_transfer.on_transfer_complete(&TransferStatus::Cancelled, 0)
                         }
                         XhciTransferState::Completed => {
                             let status = t.status();
                             let actual_length = t.actual_length();
                             drop(state);
-                            xhci_transfer
-                                .on_transfer_complete(&status, actual_length as u32)
-                                .unwrap();
+                            xhci_transfer.on_transfer_complete(&status, actual_length as u32)
                         }
                         _ => {
-                            panic!("should not take this branch");
+                            error!("should not take this branch");
+                            Err(Error::BadState)
                         }
                     }
-                });
+                };
+                let fail_handle = self.fail_handle.clone();
+                usb_transfer.set_callback(
+                    move |t: UsbTransfer<BulkTransferBuffer>| match callback(t) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("bulk transfer callback failed {:?}", e);
+                            fail_handle.fail();
+                        }
+                    },
+                );
                 submit_transfer(
+                    self.fail_handle.clone(),
                     &self.job_queue,
                     tmp_transfer,
                     &self.device_handle,
@@ -159,41 +172,50 @@ impl UsbEndpoint {
                     buffer.len()?
                 );
                 let addr = self.ep_addr();
-                usb_transfer.set_callback(move |t: UsbTransfer<BulkTransferBuffer>| {
+                let callback = move |t: UsbTransfer<BulkTransferBuffer>| {
                     debug!(
                         "ep {:#x} in transfer data {:?}",
                         addr,
                         t.buffer().as_slice()
                     );
-                    update_state(&xhci_transfer, &t).unwrap();
+                    update_state(&xhci_transfer, &t)?;
                     let state = xhci_transfer.state().lock();
                     match *state {
                         XhciTransferState::Cancelled => {
                             debug!("transfer has been cancelled");
                             drop(state);
-                            xhci_transfer
-                                .on_transfer_complete(&TransferStatus::Cancelled, 0)
-                                .unwrap();
+                            xhci_transfer.on_transfer_complete(&TransferStatus::Cancelled, 0)
                         }
                         XhciTransferState::Completed => {
                             let status = t.status();
                             let actual_length = t.actual_length() as usize;
-                            let copied_length = buffer.write(t.buffer().as_slice()).unwrap();
+                            let copied_length = buffer.write(t.buffer().as_slice())?;
                             let actual_length = cmp::min(actual_length, copied_length);
                             drop(state);
-                            xhci_transfer
-                                .on_transfer_complete(&status, actual_length as u32)
-                                .unwrap();
+                            xhci_transfer.on_transfer_complete(&status, actual_length as u32)
                         }
                         _ => {
                             // update state is already invoked. This match should not be in any
                             // other state.
-                            panic!("should not take this branch");
+                            error!("should not take this branch");
+                            Err(Error::BadState)
                         }
                     }
-                });
+                };
+                let fail_handle = self.fail_handle.clone();
+
+                usb_transfer.set_callback(
+                    move |t: UsbTransfer<BulkTransferBuffer>| match callback(t) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("bulk transfer callback {:?}", e);
+                            fail_handle.fail();
+                        }
+                    },
+                );
 
                 submit_transfer(
+                    self.fail_handle.clone(),
                     &self.job_queue,
                     tmp_transfer,
                     &self.device_handle,

@@ -11,8 +11,10 @@ use super::utils::{submit_transfer, update_state};
 use std::collections::HashMap;
 use usb::async_job_queue::AsyncJobQueue;
 use usb::error::{Error, Result};
+use usb::event_loop::FailHandle;
 use usb::xhci::scatter_gather_buffer::ScatterGatherBuffer;
 use usb::xhci::xhci_backend_device::{UsbDeviceAddress, XhciBackendDevice};
+use usb::xhci::xhci_controller::XhciFailHandle;
 use usb::xhci::xhci_transfer::{XhciTransfer, XhciTransferState, XhciTransferType};
 use usb_util::device_handle::DeviceHandle;
 use usb_util::error::Error as LibUsbError;
@@ -82,6 +84,7 @@ impl HostToDeviceControlRequest {
 
 /// Host device is a device connected to host.
 pub struct HostDevice {
+    fail_handle: Arc<XhciFailHandle>,
     // Endpoints only contains data endpoints (1 to 30). Control transfers are handled at device
     // level.
     endpoints: Vec<UsbEndpoint>,
@@ -106,11 +109,13 @@ impl Drop for HostDevice {
 impl HostDevice {
     /// Create a new host device.
     pub fn new(
+        fail_handle: Arc<XhciFailHandle>,
         job_queue: Arc<AsyncJobQueue>,
         device: LibUsbDevice,
         device_handle: DeviceHandle,
     ) -> HostDevice {
         let mut device = HostDevice {
+            fail_handle,
             endpoints: vec![],
             device,
             device_handle: Arc::new(Mutex::new(device_handle)),
@@ -220,42 +225,49 @@ impl HostDevice {
                                     buffer.read(&mut control_transfer.buffer_mut().data_buffer)?;
                                 }
                                 let tmp_transfer = xhci_transfer.clone();
+                                let callback = move |t: UsbTransfer<ControlTransferBuffer>| {
+                                    update_state(&xhci_transfer, &t)?;
+                                    let state = xhci_transfer.state().lock();
+                                    match *state {
+                                        XhciTransferState::Cancelled => {
+                                            drop(state);
+                                            xhci_transfer.on_transfer_complete(
+                                                &TransferStatus::Cancelled,
+                                                0,
+                                            )?;
+                                        }
+                                        XhciTransferState::Completed => {
+                                            let status = t.status();
+                                            let actual_length = t.actual_length();
+                                            drop(state);
+                                            xhci_transfer.on_transfer_complete(
+                                                &status,
+                                                actual_length as u32,
+                                            )?;
+                                        }
+                                        _ => {
+                                            // update_state is already invoked before match. This
+                                            // transfer  could only be `cancelled` or `compeleted`. Any
+                                            // other states means there is a bug in crosvm
+                                            // implemetation.
+                                            error!("should not take this branch");
+                                            return Err(Error::BadState);
+                                        }
+                                    }
+                                    Ok(())
+                                };
+                                let fail_handle = self.fail_handle.clone();
                                 control_transfer.set_callback(
-                                    move |t: UsbTransfer<ControlTransferBuffer>| {
-                                        update_state(&xhci_transfer, &t).unwrap();
-                                        let state = xhci_transfer.state().lock();
-                                        match *state {
-                                            XhciTransferState::Cancelled => {
-                                                drop(state);
-                                                xhci_transfer
-                                                    .on_transfer_complete(
-                                                        &TransferStatus::Cancelled,
-                                                        0,
-                                                    )
-                                                    .unwrap();
-                                            }
-                                            XhciTransferState::Completed => {
-                                                let status = t.status();
-                                                let actual_length = t.actual_length();
-                                                drop(state);
-                                                xhci_transfer
-                                                    .on_transfer_complete(
-                                                        &status,
-                                                        actual_length as u32,
-                                                    )
-                                                    .unwrap();
-                                            }
-                                            _ => {
-                                                // update_state is already invoked before match. This
-                                                // transfer  could only be `cancelled` or `compeleted`. Any
-                                                // other states means there is a bug in crosvm
-                                                // implemetation.
-                                                panic!("should not take this branch");
-                                            }
+                                    move |t: UsbTransfer<ControlTransferBuffer>| match callback(t) {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            error!("control transfer callback failed {:?}", e);
+                                            fail_handle.fail();
                                         }
                                     },
                                 );
                                 submit_transfer(
+                                    self.fail_handle.clone(),
                                     &self.job_queue,
                                     tmp_transfer,
                                     &self.device_handle,
@@ -266,7 +278,8 @@ impl HostDevice {
                                 debug!("host device handling set address");
                                 let addr = self.control_request_setup.value as u32;
                                 self.set_address(addr);
-                                xhci_transfer.on_transfer_complete(&TransferStatus::Completed, 0)?;
+                                xhci_transfer
+                                    .on_transfer_complete(&TransferStatus::Completed, 0)?;
                             }
                             HostToDeviceControlRequest::SetConfig => {
                                 debug!("host device handling set config");
@@ -291,43 +304,51 @@ impl HostDevice {
                             .buffer_mut()
                             .set_request_setup(&self.control_request_setup);
                         let tmp_transfer = xhci_transfer.clone();
+                        let callback = move |t: UsbTransfer<ControlTransferBuffer>| {
+                            debug!("setup token control transfer callback invoked");
+                            update_state(&xhci_transfer, &t)?;
+                            let state = xhci_transfer.state().lock();
+                            match *state {
+                                XhciTransferState::Cancelled => {
+                                    debug!("transfer cancelled");
+                                    drop(state);
+                                    xhci_transfer
+                                        .on_transfer_complete(&TransferStatus::Cancelled, 0)?;
+                                }
+                                XhciTransferState::Completed => {
+                                    let status = t.status();
+                                    let actual_length = t.actual_length();
+                                    if let Some(ref buffer) = buffer {
+                                        let bytes = buffer.write(&t.buffer().data_buffer)? as u32;
+                                        debug!(
+                                            "transfer completed bytes: {} actual length {}",
+                                            bytes, actual_length
+                                        );
+                                    }
+                                    drop(state);
+                                    xhci_transfer.on_transfer_complete(&status, 0)?;
+                                }
+                                _ => {
+                                    // update_state is already invoked before this match.
+                                    // Any other states indicates a bug in crosvm.
+                                    error!("should not take this branch");
+                                    return Err(Error::BadState);
+                                }
+                            }
+                            Ok(())
+                        };
+                        let fail_handle = self.fail_handle.clone();
                         control_transfer.set_callback(
-                            move |t: UsbTransfer<ControlTransferBuffer>| {
-                                debug!("setup token control transfer callback invoked");
-                                update_state(&xhci_transfer, &t).unwrap();
-                                let state = xhci_transfer.state().lock();
-                                match *state {
-                                    XhciTransferState::Cancelled => {
-                                        debug!("transfer cancelled");
-                                        drop(state);
-                                        xhci_transfer
-                                            .on_transfer_complete(&TransferStatus::Cancelled, 0)
-                                            .unwrap();
-                                    }
-                                    XhciTransferState::Completed => {
-                                        let status = t.status();
-                                        let actual_length = t.actual_length();
-                                        if let Some(ref buffer) = buffer {
-                                            let bytes =
-                                                buffer.write(&t.buffer().data_buffer).unwrap()
-                                                    as u32;
-                                            debug!(
-                                                "transfer completed bytes: {} actual length {}",
-                                                bytes, actual_length
-                                            );
-                                        }
-                                        drop(state);
-                                        xhci_transfer.on_transfer_complete(&status, 0).unwrap();
-                                    }
-                                    _ => {
-                                        // update_state is already invoked before this match.
-                                        // Any other states indicates a bug in crosvm.
-                                        panic!("should not take this branch");
-                                    }
+                            move |t: UsbTransfer<ControlTransferBuffer>| match callback(t) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    error!("control transfer callback failed {:?}", e);
+                                    fail_handle.fail();
                                 }
                             },
                         );
                         submit_transfer(
+                            self.fail_handle.clone(),
                             &self.job_queue,
                             tmp_transfer,
                             &self.device_handle,
@@ -429,7 +450,9 @@ impl HostDevice {
                 .get_interface_descriptor(*i as u8, *alt_setting as i32)
                 .ok_or(Error::Unknown)?;
             for ep_idx in 0..interface.bNumEndpoints {
-                let ep_dp = interface.endpoint_descriptor(ep_idx).ok_or(Error::Unknown)?;
+                let ep_dp = interface
+                    .endpoint_descriptor(ep_idx)
+                    .ok_or(Error::Unknown)?;
                 let ep_num = ep_dp.get_endpoint_number();
                 if ep_num == 0 {
                     debug!("endpoint 0 in endpoint descriptors");
@@ -438,6 +461,7 @@ impl HostDevice {
                 let direction = ep_dp.get_direction();
                 let ty = ep_dp.get_endpoint_type().ok_or(Error::Unknown)?;
                 self.endpoints.push(UsbEndpoint::new(
+                    self.fail_handle.clone(),
                     self.job_queue.clone(),
                     self.device_handle.clone(),
                     ep_num,

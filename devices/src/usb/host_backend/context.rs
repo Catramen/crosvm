@@ -101,7 +101,10 @@ impl LibUsbPollfdChangeHandler for PollfdChangeHandler {
 
     fn remove_poll_fd(&self, fd: RawFd) {
         if let Some(h) = self.event_handler.upgrade() {
-            h.on_event(0).unwrap();
+            match h.on_event(0) {
+                Ok(()) => {}
+                Err(e) => error!("cannot handle event {:?}", e),
+            }
         }
         self.event_loop.remove_event_for_fd(&Fd(fd));
     }

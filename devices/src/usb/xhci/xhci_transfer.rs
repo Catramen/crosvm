@@ -304,7 +304,8 @@ impl XhciTransfer {
                     .trb
                     .trb_type()
                     .ok_or(Error::BadState)
-                    .map_err(err_msg!())? == TrbType::EventData
+                    .map_err(err_msg!())?
+                    == TrbType::EventData
                 {
                     let tlength = min(edtla, bytes_transferred);
                     self.interrupter.lock().send_transfer_event_trb(

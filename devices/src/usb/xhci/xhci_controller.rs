@@ -12,6 +12,7 @@ use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use sys_util::{EventFd, GuestMemory};
+use usb::error::Result;
 use usb::event_loop::FailHandle;
 use usb::host_backend::host_backend_device_provider::HostBackendDeviceProvider;
 use usb::xhci::mmio_register::Register;
@@ -46,6 +47,20 @@ impl XhciFailHandle {
             usbcmd: regs.usbcmd.clone(),
             usbsts: regs.usbsts.clone(),
             xhci_failed: AtomicBool::new(false),
+        }
+    }
+}
+
+/// Helper function to wrap up a closure with fail handle.
+pub fn xhci_failible_closure<C: FnMut() -> Result<()> + 'static + Send>(
+    fail_handle: Arc<XhciFailHandle>,
+    mut callback: C,
+) -> impl FnMut() + 'static + Send {
+    move || match callback() {
+        Ok(()) => {}
+        Err(e) => {
+            error!("callback failed {:?}", e);
+            fail_handle.fail();
         }
     }
 }
@@ -201,7 +216,7 @@ impl PciDevice for XhciController {
     fn allocate_io_bars(
         &mut self,
         resources: &mut SystemAllocator,
-    ) -> Result<Vec<(u64, u64)>, PciDeviceError> {
+    ) -> std::result::Result<Vec<(u64, u64)>, PciDeviceError> {
         // xHCI spec 5.2.1.
         let bar0 = resources
             .allocate_mmio_addresses(XHCI_BAR0_SIZE)

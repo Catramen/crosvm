@@ -57,13 +57,17 @@ impl HostBackendDeviceProvider {
 }
 
 impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
-    fn start(&mut self, event_loop: Arc<EventLoop>, hub: Arc<UsbHub>) -> Result<()> {
+    fn start(
+        &mut self,
+        fail_handle: Arc<XhciFailHandle>,
+        event_loop: Arc<EventLoop>,
+        hub: Arc<UsbHub>,
+    ) -> Result<()> {
         match mem::replace(self, HostBackendDeviceProvider::Failed) {
             HostBackendDeviceProvider::Created { sock } => {
                 let ctx = Context::new(event_loop.clone())?;
                 let job_queue = AsyncJobQueue::init(&event_loop)?;
-
-                let inner = Arc::new(ProviderInner::new(job_queue, ctx, sock, hub));
+                let inner = Arc::new(ProviderInner::new(fail_handle, job_queue, ctx, sock, hub));
                 let handler: Arc<EventHandler> = inner.clone();
                 event_loop.add_event(
                     &inner.sock,
@@ -99,6 +103,7 @@ impl XhciBackendDeviceProvider for HostBackendDeviceProvider {
 
 /// ProviderInner listens to control socket.
 pub struct ProviderInner {
+    fail_handle: Arc<XhciFailHandle>,
     job_queue: Arc<AsyncJobQueue>,
     ctx: Context,
     sock: MsgSocket<UsbControlResult, UsbControlCommand>,
@@ -107,12 +112,14 @@ pub struct ProviderInner {
 
 impl ProviderInner {
     fn new(
+        fail_handle: Arc<XhciFailHandle>,
         job_queue: Arc<AsyncJobQueue>,
         ctx: Context,
         sock: MsgSocket<UsbControlResult, UsbControlCommand>,
         usb_hub: Arc<UsbHub>,
     ) -> ProviderInner {
         ProviderInner {
+            fail_handle,
             job_queue,
             ctx,
             sock,
@@ -191,6 +198,7 @@ impl EventHandler for ProviderInner {
                     }
                 };
                 let device = Box::new(HostDevice::new(
+                    self.fail_handle.clone(),
                     self.job_queue.clone(),
                     device,
                     device_handle,

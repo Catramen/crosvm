@@ -156,7 +156,8 @@ pub unsafe trait TrbCast: DataInit + TypedTrb {
         if Trb::from_slice(self.as_slice())
             .ok_or(Error::Unknown)?
             .trb_type()
-            .ok_or(Error::BadState)? != T::TY
+            .ok_or(Error::BadState)?
+            != T::TY
         {
             return Err(Error::BadState);
         }
@@ -167,7 +168,8 @@ pub unsafe trait TrbCast: DataInit + TypedTrb {
         if Trb::from_slice(self.as_slice())
             .ok_or(Error::Unknown)?
             .trb_type()
-            .ok_or(Error::BadState)? != T::TY
+            .ok_or(Error::BadState)?
+            != T::TY
         {
             return Err(Error::BadState);
         }

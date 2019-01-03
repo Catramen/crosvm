@@ -20,6 +20,7 @@ use sys_util::{GuestAddress, GuestMemory};
 use usb::auto_callback::AutoCallback;
 use usb::error::{Error, Result};
 use usb::event_loop::EventLoop;
+use usb::xhci::xhci_controller::{self, XhciFailHandle};
 
 /// See spec 4.5.1 for dci.
 /// index 0: Control endpoint. Device Context Index: 1.
@@ -40,12 +41,14 @@ fn valid_endpoint_id(endpoint_id: u8) -> bool {
 
 #[derive(Clone)]
 pub struct DeviceSlots {
+    fail_handle: Arc<XhciFailHandle>,
     hub: Arc<UsbHub>,
     slots: Vec<Arc<DeviceSlot>>,
 }
 
 impl DeviceSlots {
     pub fn new(
+        fail_handle: Arc<XhciFailHandle>,
         dcbaap: Register<u64>,
         hub: Arc<UsbHub>,
         interrupter: Arc<Mutex<Interrupter>>,
@@ -63,7 +66,11 @@ impl DeviceSlots {
                 mem.clone(),
             )));
         }
-        DeviceSlots { hub, slots }
+        DeviceSlots {
+            fail_handle,
+            hub,
+            slots,
+        }
     }
 
     /// Note that slot id starts from 0. Slot index start from 1.
@@ -84,13 +91,17 @@ impl DeviceSlots {
         debug!("stopping all device slots and resetting host hub");
         let slots = self.slots.clone();
         let hub = self.hub.clone();
-        let auto_callback = AutoCallback::new(move || {
-            for slot in &slots {
-                slot.reset();
-            }
-            hub.reset().unwrap();
-            callback();
-        });
+        let auto_callback = AutoCallback::new(xhci_controller::xhci_failible_closure(
+            self.fail_handle.clone(),
+            move || {
+                for slot in &slots {
+                    slot.reset();
+                }
+                hub.reset()?;
+                callback();
+                Ok(())
+            },
+        ));
         self.stop_all(auto_callback);
     }
 
@@ -104,23 +115,40 @@ impl DeviceSlots {
 
     /// Disable a slot. This might happen asynchronously, if there is any pending transfers. The
     /// callback will be invoked when slot is actually disabled.
-    pub fn disable_slot<C: FnMut(TrbCompletionCode) + 'static + Send>(
+    pub fn disable_slot<C: FnMut(TrbCompletionCode) -> Result<()> + 'static + Send>(
         &self,
         slot_id: u8,
         cb: C,
     ) -> Result<()> {
         debug!("device slot {} is being disabled", slot_id);
-        DeviceSlot::disable(&self.slots[slot_id as usize - 1], cb)
+        DeviceSlot::disable(
+            self.fail_handle.clone(),
+            &self.slots[slot_id as usize - 1],
+            cb,
+        )
     }
 
     /// Reset a slot. This is a shortcut call for DeviceSlot::reset_slot.
-    pub fn reset_slot<C: FnMut(TrbCompletionCode) + 'static + Send>(
+    pub fn reset_slot<C: FnMut(TrbCompletionCode) -> Result<()> + 'static + Send>(
         &self,
         slot_id: u8,
         cb: C,
     ) -> Result<()> {
         debug!("device slot {} is resetting", slot_id);
-        DeviceSlot::reset_slot(&self.slots[slot_id as usize - 1], cb)
+        DeviceSlot::reset_slot(
+            self.fail_handle.clone(),
+            &self.slots[slot_id as usize - 1],
+            cb,
+        )
+    }
+
+    pub fn stop_endpoint<C: FnMut(TrbCompletionCode) -> Result<()> + 'static + Send>(
+        &self,
+        slot_id: u8,
+        endpoint_id: u8,
+        cb: C,
+    ) -> Result<()> {
+        self.slots[slot_id as usize - 1].stop_endpoint(self.fail_handle.clone(), endpoint_id, cb)
     }
 }
 
@@ -266,33 +294,37 @@ impl DeviceSlot {
 
     /// Disable this device slot. If the slot is not enabled, callback will be invoked immediately
     /// with error. Otherwise, callback will be invoked when all trc is stopped.
-    pub fn disable<C: FnMut(TrbCompletionCode) + 'static + Send>(
+    pub fn disable<C: FnMut(TrbCompletionCode) -> Result<()> + 'static + Send>(
+        fail_handle: Arc<XhciFailHandle>,
         slot: &Arc<DeviceSlot>,
         mut callback: C,
     ) -> Result<()> {
         if slot.enabled.load(Ordering::SeqCst) {
             let slot_weak = Arc::downgrade(slot);
-            let auto_callback = AutoCallback::new(move || {
-                // Slot should still be alive when the callback is invoked. If it's not, there must
-                // be a bug somewhere.
-                let slot = slot_weak.upgrade().unwrap();
-                let mut device_context = slot.get_device_context().unwrap();
-                device_context
-                    .slot_context
-                    .set_state(DeviceSlotState::DisabledOrEnabled);
-                slot.set_device_context(device_context).unwrap();
-                slot.reset();
-                debug!(
-                    "device slot {}: all trc disabled, sending trb",
-                    slot.slot_id
-                );
-                callback(TrbCompletionCode::Success);
-            });
+            let auto_callback = AutoCallback::new(xhci_controller::xhci_failible_closure(
+                fail_handle,
+                move || {
+                    // Slot should still be alive when the callback is invoked. If it's not, there must
+                    // be a bug somewhere.
+                    let slot = slot_weak.upgrade().ok_or(Error::Unknown)?;
+                    let mut device_context = slot.get_device_context()?;
+                    device_context
+                        .slot_context
+                        .set_state(DeviceSlotState::DisabledOrEnabled);
+                    slot.set_device_context(device_context)?;
+                    slot.reset();
+                    debug!(
+                        "device slot {}: all trc disabled, sending trb",
+                        slot.slot_id
+                    );
+                    callback(TrbCompletionCode::Success)?;
+                    Ok(())
+                },
+            ));
             slot.stop_all_trc(auto_callback);
             Ok(())
         } else {
-            callback(TrbCompletionCode::SlotNotEnabledError);
-            Ok(())
+            callback(TrbCompletionCode::SlotNotEnabledError)
         }
     }
 
@@ -465,8 +497,7 @@ impl DeviceSlot {
                 .mem
                 .read_obj_from_addr(GuestAddress(
                     trb.get_input_context_pointer() + DEVICE_CONTEXT_ENTRY_SIZE as u64,
-                ))
-                .map_err(err_msg!(Error::BadState))?;
+                )).map_err(err_msg!(Error::BadState))?;
             device_context
                 .slot_context
                 .set_interrupter_target(input_slot_context.get_interrupter_target());
@@ -483,8 +514,7 @@ impl DeviceSlot {
                 .mem
                 .read_obj_from_addr(GuestAddress(
                     trb.get_input_context_pointer() + 2 * DEVICE_CONTEXT_ENTRY_SIZE as u64,
-                ))
-                .map_err(err_msg!(Error::BadState))?;
+                )).map_err(err_msg!(Error::BadState))?;
             device_context.endpoint_context[0]
                 .set_max_packet_size(ep0_context.get_max_packet_size());
         }
@@ -494,30 +524,34 @@ impl DeviceSlot {
 
     /// Reset the device slot to default state and deconfigures all but the
     /// control endpoint.
-    pub fn reset_slot<C: FnMut(TrbCompletionCode) + 'static + Send>(
+    pub fn reset_slot<C: FnMut(TrbCompletionCode) -> Result<()> + 'static + Send>(
+        fail_handle: Arc<XhciFailHandle>,
         slot: &Arc<DeviceSlot>,
         mut callback: C,
     ) -> Result<()> {
         let state = slot.state()?;
         if state != DeviceSlotState::Addressed && state != DeviceSlotState::Configured {
             error!("reset slot failed due to context state error {:?}", state);
-            callback(TrbCompletionCode::ContextStateError);
-            return Ok(());
+            return callback(TrbCompletionCode::ContextStateError);
         }
 
         let weak_s = Arc::downgrade(&slot);
-        let auto_callback = AutoCallback::new(move || {
-            let s = weak_s.upgrade().unwrap();
-            for i in FIRST_TRANSFER_ENDPOINT_DCI..DCI_INDEX_END {
-                s.drop_one_endpoint(i).unwrap();
-            }
-            let mut ctx = s.get_device_context().unwrap();
-            ctx.slot_context.set_state(DeviceSlotState::Default);
-            ctx.slot_context.set_context_entries(1);
-            ctx.slot_context.set_root_hub_port_number(0);
-            s.set_device_context(ctx).unwrap();
-            callback(TrbCompletionCode::Success);
-        });
+        let auto_callback = AutoCallback::new(xhci_controller::xhci_failible_closure(
+            fail_handle,
+            move || {
+                let s = weak_s.upgrade().ok_or(Error::Unknown)?;
+                for i in FIRST_TRANSFER_ENDPOINT_DCI..DCI_INDEX_END {
+                    s.drop_one_endpoint(i)?;
+                }
+                let mut ctx = s.get_device_context()?;
+                ctx.slot_context.set_state(DeviceSlotState::Default);
+                ctx.slot_context.set_context_entries(1);
+                ctx.slot_context.set_root_hub_port_number(0);
+                s.set_device_context(ctx)?;
+                callback(TrbCompletionCode::Success)?;
+                Ok(())
+            },
+        ));
         slot.stop_all_trc(auto_callback);
         Ok(())
     }
@@ -532,30 +566,35 @@ impl DeviceSlot {
     }
 
     /// Stop a endpoint.
-    pub fn stop_endpoint<C: FnMut(TrbCompletionCode) + 'static + Send>(
+    pub fn stop_endpoint<C: FnMut(TrbCompletionCode) -> Result<()> + 'static + Send>(
         &self,
+        fail_handle: Arc<XhciFailHandle>,
         endpoint_id: u8,
         mut cb: C,
-    ) {
+    ) -> Result<()> {
         if !valid_endpoint_id(endpoint_id) {
             error!("trb indexing wrong endpoint id");
-            cb(TrbCompletionCode::TrbError);
-            return;
+            return cb(TrbCompletionCode::TrbError);
         }
         let index = endpoint_id - 1;
         match self.get_trc(index as usize) {
             Some(trc) => {
                 debug!("stopping endpoint");
-                let auto_cb = AutoCallback::new(move || {
-                    cb(TrbCompletionCode::Success);
-                });
+                let auto_cb = AutoCallback::new(xhci_controller::xhci_failible_closure(
+                    fail_handle,
+                    move || {
+                        cb(TrbCompletionCode::Success)?;
+                        Ok(())
+                    },
+                ));
                 trc.stop(auto_cb);
             }
             None => {
                 error!("endpoint at index {} is not started", index);
-                cb(TrbCompletionCode::ContextStateError);
+                cb(TrbCompletionCode::ContextStateError)?;
             }
         }
+        Ok(())
     }
 
     /// Set transfer ring dequeue pointer.
@@ -646,10 +685,12 @@ impl DeviceSlot {
         // make a difference here.
         let ctx: EndpointContext = self
             .mem
-            .read_obj_from_addr(input_context_ptr
-                .checked_add((device_context_index as u64 + 1) * DEVICE_CONTEXT_ENTRY_SIZE as u64)
-                .ok_or(Error::BadState)?)
-            .map_err(err_msg!(Error::BadState))?;
+            .read_obj_from_addr(
+                input_context_ptr
+                    .checked_add(
+                        (device_context_index as u64 + 1) * DEVICE_CONTEXT_ENTRY_SIZE as u64,
+                    ).ok_or(Error::BadState)?,
+            ).map_err(err_msg!(Error::BadState))?;
         debug!("context being copied {:?}", ctx);
         self.mem
             .write_obj_at_addr(
@@ -657,8 +698,7 @@ impl DeviceSlot {
                 self.get_device_context_addr()?
                     .checked_add(device_context_index as u64 * DEVICE_CONTEXT_ENTRY_SIZE as u64)
                     .ok_or(Error::BadState)?,
-            )
-            .map_err(err_msg!(Error::BadState))
+            ).map_err(err_msg!(Error::BadState))
     }
 
     fn get_device_context_addr(&self) -> Result<GuestAddress> {
@@ -666,8 +706,7 @@ impl DeviceSlot {
             .mem
             .read_obj_from_addr(GuestAddress(
                 self.dcbaap.get_value() + size_of::<u64>() as u64 * self.slot_id as u64,
-            ))
-            .map_err(err_msg!(Error::BadState))?;
+            )).map_err(err_msg!(Error::BadState))?;
         Ok(GuestAddress(addr))
     }
 
