@@ -4,7 +4,6 @@
 
 pub use super::xhci_abi_schema::*;
 use data_model::DataInit;
-use std;
 use usb::error::{Error, Result};
 
 unsafe impl DataInit for Trb {}

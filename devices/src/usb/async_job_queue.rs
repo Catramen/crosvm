@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 use std::mem;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use sys_util::{EventFd, WatchingEvents};
 use usb::error::{Error, Result};

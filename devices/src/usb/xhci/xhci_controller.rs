@@ -101,6 +101,7 @@ enum XhciControllerState {
     Initialized {
         mmio: MMIOSpace,
         // Xhci init could fail.
+        #[allow(dead_code)]
         xhci: Option<Arc<Xhci>>,
         fail_handle: Arc<XhciFailHandle>,
     },
