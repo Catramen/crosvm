@@ -2,7 +2,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+brk: 1
+lstat: 1
+gettid: 1
+readlinkat: 1
 timerfd_create: 1
+name_to_handle_at: 1
+access: 1
 rt_sigprocmask: 1
 recvfrom: 1
 getsockname: 1
