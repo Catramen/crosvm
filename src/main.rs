@@ -1069,6 +1069,62 @@ fn crosvm_main() -> std::result::Result<(), ()> {
         return Err(());
     }
 
+    // The intent of our panic hook is to get panic info and a stacktrace into the syslog, even for
+    // jailed subprocesses.
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info|{
+        use std::fs::File;
+        use std::io::Read;
+        // Opens a pipe and puts the write end into the stderr FD slot. On success, returns the read
+        // end of the pipe as a file.
+        fn redirect_stderr() -> Option<File> {
+            use std::os::unix::io::FromRawFd;
+            let mut fds = [-1, -1];
+            unsafe {
+                // Safe because pipe2 will only ever write two integers to our array and we check
+                // output.
+                let mut ret = libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK);
+                if ret != 0 {
+                    return None
+                }
+                // Safe because the FD we are duplicating is owned by us.
+                ret = libc::dup2(fds[1], libc::STDERR_FILENO);
+                if ret == -1 {
+                    // Leaks FDs, but not important right before abort.
+                    return None
+                }
+                // The write end is no longer needed.
+                libc::close(fds[1]);
+                Some(File::from_raw_fd(fds[0]))
+            }
+        }
+
+        // Redirect stderr to a pipe we can read from later.
+        let mut read_file = match redirect_stderr() {
+            Some(f) => f,
+            None => std::process::abort(),
+        };
+        // Only though the default panic handler can we get a stack trace. It only ever prints to
+        // stderr, hence all the previous code to redirect it to a pipe we can read.
+        std::env::set_var("RUST_BACKTRACE", "1");
+        default_panic(info);
+        // Closes the write end of the pipe so that we can reach EOF in read_to_string.
+        unsafe {
+            // Not necessarily safe because others might write to non-existent stderr, but the
+            // process will abort before anything might open an FD in place of stderr's FD.
+            libc::close(libc::STDERR_FILENO);
+        }
+        let mut panic_output = String::new();
+        // Ignore errors and print what we got.
+        let _ = read_file.read_to_string(&mut panic_output);
+        // Split by line because the logging facilities do not handle embedded new lines well.
+        for line in panic_output.lines() {
+            error!("{}", line);
+        }
+        // Always abort so that the crash logger will get triggered.
+        std::process::abort();
+    }));
+
     let mut args = std::env::args();
     if args.next().is_none() {
         error!("expected executable name");
