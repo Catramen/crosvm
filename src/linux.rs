@@ -1217,23 +1217,8 @@ fn run_control(
                                     &usb_control_socket,
                                 );
 
-                                let response_sock = {
-                                    let mut buf = socket.as_ref()
-                                        .local_addr()
-                                        .map_err(|_| Error::ConnectToSocket)?
-                                        .as_pathname()
-                                        .ok_or(Error::ConnectToSocket)?
-                                        .to_path_buf();
-                                    buf.pop();
-                                    buf.push("crosvm.tmp.sock");
-                                    let tmp_socket = buf.as_path();
-                                    let s = UnixDatagram::unbound().map_err(Error::CreateSocket)?;
-                                    s.connect(tmp_socket).map_err(|_| Error::ConnectToSocket)?;
-                                    Sender::<VmResponse>::new(s)
-                                };
-                                if let Err(e) = socket.send(&response) {
-                                    error!("failed to send VmResponse: {:?}", e);
-                                }
+                                // Error is already logged.
+                                let _ = send_response(&socket, response);
                                 if let Some(run_mode) = run_mode_opt {
                                     info!("control socket changed run mode to {:?}", run_mode);
                                     match run_mode {
@@ -1296,5 +1281,27 @@ fn run_control(
         .set_canon_mode()
         .expect("failed to restore canonical mode for terminal");
 
+    Ok(())
+}
+
+fn send_response(socket: &UnlinkMsgSocket<VmResponse, VmRequest>,
+                 response: VmResponse) -> Result<()> {
+    let response_sock = {
+        let mut buf = socket.as_ref()
+            .local_addr()
+            .map_err(|_| Error::ConnectToSocket)?
+            .as_pathname()
+            .ok_or(Error::ConnectToSocket)?
+            .to_path_buf();
+        buf.pop();
+        buf.push("crosvm.tmp.sock");
+        let tmp_socket = buf.as_path();
+        let s = UnixDatagram::unbound().map_err(Error::CreateSocket)?;
+        s.connect(tmp_socket).map_err(|_| Error::ConnectToSocket)?;
+        Sender::<VmResponse>::new(s)
+    };
+    if let Err(e) = response_sock.send(&response) {
+        error!("failed to send VmResponse: {:?}", e);
+    }
     Ok(())
 }
