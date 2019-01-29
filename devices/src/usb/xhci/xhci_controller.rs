@@ -179,6 +179,10 @@ impl XhciController {
 }
 
 impl PciDevice for XhciController {
+    fn debug_label(&self) -> String {
+        "xhci controller".to_owned()
+    }
+
     fn keep_fds(&self) -> Vec<RawFd> {
         match self.state {
             XhciControllerState::Created {
