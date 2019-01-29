@@ -102,7 +102,6 @@ pub struct HostDevice {
 impl Drop for HostDevice {
     fn drop(&mut self) {
         self.release_interfaces();
-        self.attach_host_drivers();
     }
 }
 
@@ -127,7 +126,6 @@ impl HostDevice {
             buffer: None,
             job_queue,
         };
-        device.detach_host_drivers();
         device
     }
 
