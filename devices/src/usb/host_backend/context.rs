@@ -61,6 +61,17 @@ impl Context {
             }
         };
         for device in device_iter {
+            error!("jkk: enumerate device bus {}, address {}", device.get_bus_number(),
+                    device.get_address());
+            match device.get_device_descriptor() {
+                Ok(d) => {
+                    error!("jkk: pid {:x}, vid {:x}", d.idProduct, d.idVendor);
+                },
+                Err(e) => {
+                    error!("jkk: cannot get descriptor");
+                }
+            }
+
             if device.get_bus_number() == bus && device.get_address() == addr {
                 if let Ok(descriptor) = device.get_device_descriptor() {
                     if descriptor.idProduct == pid && descriptor.idVendor == vid {
