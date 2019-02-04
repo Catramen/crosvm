@@ -10,6 +10,7 @@ use bindings;
 use error::{Error, Result};
 use libusb_device::LibUsbDevice;
 use std::sync::Arc;
+use hotplug::UsbHotplugHandler;
 
 use sync::Mutex;
 
@@ -131,6 +132,13 @@ impl LibUsbContext {
     /// Remove the previous registered notifiers.
     pub fn remove_pollfd_notifiers(&self) {
         self.inner.remove_pollfd_notifiers();
+    }
+
+    /// Set a callback that could handle hotplug events. Currently, this function listen to hotplug event of all devices.
+    pub fn set_hotplug_cb<H: UsbHotplugHandler>(&self, handler: H) -> Result<()> {
+        try_libusb!(unsafe {
+            bindings::libusb_hotplug_register_callback()
+        });
     }
 }
 
