@@ -3,11 +3,8 @@
 // found in the LICENSE file.
 
 use std::path::Path;
-use std::fs::File;
+use std::fs::{self, File};
 
-#[derive(Debug)]
-pub enum Error {
-    NoSuchDevice,
-}
+use error::*;
 
-pub type Result<T> = std::result::Result<T, Error>;
+
