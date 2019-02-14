@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use data_model::DataInit;
+
 /// Device descriptor size in bytes.
 const DEVICE_DESC_SIZE: usize = 18;
 /// Config descriptor size in bytes.
@@ -10,6 +12,8 @@ const CONFIG_DESC_SIZE: usize = 9;
 const IF_DESC_SIZE: usize = 9;
 /// Endpoint descriptor size in bytes.
 const EP_DESC_SIZE: usize = 7;
+/// Size of descriptor header.
+const DESC_HEADER_SIZE: usize = 2;
 
 const DEVICE_DESC_TYPE: u8 = 1;
 const CONFIG_DESC_TYPE: u8 = 2;
@@ -104,7 +108,7 @@ pub struct InterfaceDescriptor {
     pub interface: u8,
 }
 
-unsafe impl DataInit for ConfigDescriptor {}
+unsafe impl DataInit for InterfaceDescriptor {}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -167,22 +171,77 @@ pub struct DescriptorIter {
     position: usize,
 }
 
+impl DescriptorIter {
+    pub fn new(raw: Vec<u8>) -> DescriptorIter {
+        DescriptorIter {
+            raw,
+            position: 0,
+        }
+    }
+
+    fn read_descriptor<D: DataInit>(&mut self, len_in_header: u8) -> Option<D> {
+        let desc_size = std::mem::size_of::<D>();
+        if len_in_header as usize != desc_size {
+            error!("wrong descriptor size for descriptor");
+            return None;
+        }
+        let desc = D::copy_from_slice(
+            &self.raw[self.position..(self.position + desc_size)]
+        )?;
+        self.position += desc_size;
+        Some(desc)
+    }
+}
+
 impl Iterator for DescriptorIter {
     type Item = Descriptor;
+
     fn next(&mut self) -> Option<Descriptor> {
-        if position >= self.raw.len() {
+        if self.position + DESC_HEADER_SIZE > self.raw.len() {
             return None;
+        }
+        let header = CommonDescriptorHeader::copy_from_slice(
+            &self.raw[self.position..(self.position + DESC_HEADER_SIZE)])?;
+
+        if self.position + header.length as usize > self.raw.len() {
+            error!("raw descriptor size is not long enough");
+            return None;
+        }
+
+        match header.descriptor_type {
+            DEVICE_DESC_TYPE => {
+                let desc: DeviceDescriptor = self.read_descriptor(header.length)?;
+                Some(Descriptor::Device(desc))
+            },
+            CONFIG_DESC_TYPE => {
+                let desc: ConfigDescriptor = self.read_descriptor(header.length)?;
+                Some(Descriptor::Config(desc))
+            },
+            IF_DESC_TYPE => {
+                let desc: InterfaceDescriptor = self.read_descriptor(header.length)?;
+                Some(Descriptor::Interface(desc))
+            },
+            EP_DESC_TYPE => {
+                let desc: EndpointDescriptor = self.read_descriptor(header.length)?;
+                Some(Descriptor::Endpoint(desc))
+            },
+            _ => {
+                let mut desc: Vec<u8> = vec![];
+                desc.extend_from_slice(&self.raw[self.position..(self.position + header.length as usize)]);
+                self.position += header.length as usize;
+                Some(Descriptor::Other(desc))
+            }
         }
     }
 }
 
 mod tests {
-    use super::*;
     #[test]
     fn descriptor_sizes() {
         assert_eq!(std::mem::size_of::<DeviceDescriptor>(), DEVICE_DESC_SIZE);
         assert_eq!(std::mem::size_of::<ConfigDescriptor>(), CONFIG_DESC_SIZE);
         assert_eq!(std::mem::size_of::<InterfaceDescriptor>(), IF_DESC_SIZE);
         assert_eq!(std::mem::size_of::<EndpointDescriptor>(), EP_DESC_SIZE);
+        assert_eq!(std::mem::size_of::<CommonDescriptorHeader>(), DESC_HEADER_SIZE);
     }
 }

@@ -7,3 +7,4 @@ authors = ["The Chromium OS Authors"]
 assertions = { path = "../assertions" }
 data_model = { path = "../data_model" }
 sync = { path = "../sync" }
+sys_util = { path = "../sys_util" }
