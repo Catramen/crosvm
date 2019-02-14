@@ -108,19 +108,42 @@ impl Device {
         self.state = State::Opened(fd);
     }
 
+    pub fn get_busnum(&self) -> u8 {
+        self.busnum
+    }
+
+    pub fn get_devnum(&self) -> u8 {
+        self.devnum
+    }
+
+    pub fn get_device_descriptor(&self) -> &DeviceDescriptor {
+        &self.device_desc
+    }
+
+    pub fn get_configs(&self) -> &[Config] {
+        self.configs.as_slice()
+    }
+
+    pub fn get_config_by_value(&self, cfg_val: u8) -> Option<&Config> {
+        for c in &self.configs {
+            if c.desc.get_configuration_value() == cfg_val {
+                return Some(&c);
+            }
+        }
+        None
+    }
+
     pub fn get_active_config_value(&self) -> Result<u8> {
         Self::read_and_parse(&self.sysfs_dir, "bConfigurationValue").ok_or(Error::IO)
     }
 
     pub fn get_active_config(&self) -> Result<&Config> {
         let cfg_val = self.get_active_config_value()?;
-        for c in &self.configs {
-            if c.desc.get_configuration_value() == cfg_val {
-                return Ok(&c);
-            }
-        }
-        error!("cannot find config descriptor for current active config {}", cfg_val);
-        Err(Error::Other)
+        self.get_config_by_value(cfg_val)
+            .ok_or_else(|| {
+                error!("cannot find config descriptor for current active config {}", cfg_val);
+                Error::Other
+            })
     }
 
     fn new(path: &PathBuf) -> Option<Device> {
@@ -138,7 +161,7 @@ impl Device {
     }
 
     fn read_and_parse<T: std::str::FromStr, P: AsRef<Path>>(path: &P, file_name: &str) -> Option<T> {
-        let mut file_path = path.as_ref().join(file_name);
+        let file_path = path.as_ref().join(file_name);
         let val = fs::read_to_string(file_path).ok()?.trim().parse().ok()?;
         Some(val)
     }

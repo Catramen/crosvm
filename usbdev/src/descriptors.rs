@@ -282,6 +282,7 @@ impl Iterator for DescriptorIter {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
