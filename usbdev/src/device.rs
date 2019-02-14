@@ -10,20 +10,38 @@ use descriptors::*;
 
 const SYSFS_DEVICES_PATH: &str = "/sys/bus/usb/devices";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub desc: ConfigDescriptor,
-    pub interfaces: Vec<Interface>
+    pub interfaces: Vec<InterfaceAltSettings>
 }
 
-#[derive(Debug)]
-pub struct InterfaceAltSetting {
+impl Config {
+    pub fn get_interface(&self, if_num: u8, alt_setting: u8 ) -> Option<&Interface> {
+        for ias in &self.interfaces {
+            for i in &ias.alt_settings {
+                if i.desc.get_interface_number() == if_num && i.desc.get_alternate_setting() == alt_setting {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InterfaceAltSettings {
+    pub alt_settings: Vec<Interface>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Interface {
     pub desc: InterfaceDescriptor,
     pub endpoints: Vec<EndpointDescriptor>,
 }
 
-impl InterfaceAltSetting {
-    fn read_from(iter: &mut DescriptorIter) -> Option<InterfaceAltSetting> {
+impl Interface {
+    fn read_from(iter: &mut DescriptorIter) -> Option<Interface> {
         let interface_desc = iter.read_next_interface_desc_in_this_config()?;
 
         // Read all endpoint descriptors of this interface.
@@ -32,7 +50,7 @@ impl InterfaceAltSetting {
             let endpoint_desc =  iter.read_next_endpoint_desc_in_this_interface()?;
             endpoints.push(endpoint_desc);
         }
-        Some(InterfaceAltSetting {
+        Some(Interface {
             desc: interface_desc,
             endpoints,
         })
@@ -40,8 +58,15 @@ impl InterfaceAltSetting {
 }
 
 #[derive(Debug)]
-pub struct Interface {
-    pub alt_settings: Vec<InterfaceAltSetting>,
+enum State {
+    // We got information of this device.
+    Info,
+    // We have opened the device.
+    Opened(File),
+    // We think the device is failed.
+    Failed,
+    // We think the device is already unplugged.
+    Unplugged,
 }
 
 #[derive(Debug)]
@@ -52,6 +77,7 @@ pub struct Device {
     configs: Vec<Config>,
     // Path to the sysfs folder of this device.
     sysfs_dir: String,
+    state: State,
 }
 
 impl Device {
@@ -75,6 +101,28 @@ impl Device {
         Ok(devices)
     }
 
+    pub fn set_unplug_callback() {
+    }
+
+    pub fn open(&mut self, fd: File) {
+        self.state = State::Opened(fd);
+    }
+
+    pub fn get_active_config_value(&self) -> Result<u8> {
+        Self::read_and_parse(&self.sysfs_dir, "bConfigurationValue").ok_or(Error::IO)
+    }
+
+    pub fn get_active_config(&self) -> Result<&Config> {
+        let cfg_val = self.get_active_config_value()?;
+        for c in &self.configs {
+            if c.desc.get_configuration_value() == cfg_val {
+                return Ok(&c);
+            }
+        }
+        error!("cannot find config descriptor for current active config {}", cfg_val);
+        Err(Error::Other)
+    }
+
     fn new(path: &PathBuf) -> Option<Device> {
         let busnum = Self::read_busnum(path)?;
         let devnum = Self::read_devnum(path)?;
@@ -85,21 +133,22 @@ impl Device {
             device_desc,
             configs,
             sysfs_dir: String::from(path.to_str()?),
+            state: State::Info
         })
     }
 
+    fn read_and_parse<T: std::str::FromStr, P: AsRef<Path>>(path: &P, file_name: &str) -> Option<T> {
+        let mut file_path = path.as_ref().join(file_name);
+        let val = fs::read_to_string(file_path).ok()?.trim().parse().ok()?;
+        Some(val)
+    }
+
     fn read_busnum(path: &PathBuf) -> Option<u8> {
-        let mut busnum_path = path.clone();
-        busnum_path.push("busnum");
-        let busnum: u8 = fs::read_to_string(busnum_path).ok()?.trim().parse().ok()?;
-        Some(busnum)
+        Self::read_and_parse(path, "busnum")
     }
 
     fn read_devnum(path: &PathBuf) -> Option<u8> {
-        let mut devnum_path = path.clone();
-        devnum_path.push("devnum");
-        let devnum: u8 = fs::read_to_string(devnum_path).ok()?.trim().parse().ok()?;
-        Some(devnum)
+        Self::read_and_parse(path, "devnum")
     }
 
     fn read_descriptors(path: &PathBuf) -> Option<(DeviceDescriptor, Vec<Config>)> {
@@ -125,18 +174,18 @@ impl Device {
                 Descriptor::Config(d) => d,
                 _ => continue,
             };
-            let mut interfaces: Vec<Interface> = vec![];
+            let mut interfaces: Vec<InterfaceAltSettings> = vec![];
 
             // The following loop group interface_descriptors into alt_settings by interface_num.
             let mut cur_interface_num: i16 = -1;
             let mut alt_settings = vec![];
             loop {
                 // Try to read next alt_settings.
-                let alt_setting = match InterfaceAltSetting::read_from(&mut iter) {
+                let interface = match Interface::read_from(&mut iter) {
                     Some(a) => a,
                     None => {
                         // There is no more alt settings, push the last one.
-                        interfaces.push(Interface {
+                        interfaces.push(InterfaceAltSettings {
                             alt_settings,
                         });
                         break;
@@ -145,39 +194,32 @@ impl Device {
 
                 // Init cur_interface_num when we meet the first interface descriptor.
                 if cur_interface_num == -1 {
-                    cur_interface_num = alt_setting.desc.get_interface_number() as i16;
+                    cur_interface_num = interface.desc.get_interface_number() as i16;
                 }
 
                 // If it is the same interface_num, it's in the same alt_settings set.
-                if cur_interface_num == alt_setting.desc.get_interface_number() as i16 {
-                    alt_settings.push(alt_setting);
+                if cur_interface_num == interface.desc.get_interface_number() as i16 {
+                    alt_settings.push(interface);
                 } else {
                     // If it is a new interface_num, we creat a new set of alt_settings and push
                     // the older one into interfaces.
-                    cur_interface_num = alt_setting.desc.get_interface_number() as i16;
+                    cur_interface_num = interface.desc.get_interface_number() as i16;
                     let mut tmp = vec![];
                     std::mem::swap(&mut tmp, &mut alt_settings);
-                    alt_settings.push(alt_setting);
+                    alt_settings.push(interface);
 
-                    let interface = Interface {
-                        alt_settings: tmp,
-                    };
-                    interfaces.push(interface);
+                    interfaces.push(InterfaceAltSettings {
+                        alt_settings: tmp
+                    });
                 }
             }
 
             configs.push(Config {
                 desc: config_desc,
-                interfaces
+                interfaces,
             });
         }
         Some((device_desc, configs))
-    }
-
-    pub fn set_unplug_callback() {
-    }
-
-    pub fn open(&self, _: File) {
     }
 }
 

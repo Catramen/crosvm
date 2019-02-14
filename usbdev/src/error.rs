@@ -4,8 +4,14 @@
 
 #[derive(Debug)]
 pub enum Error {
+    // Unable to access sysfs folders.
     UnableToAccess,
+    // There is no such device.
     NoSuchDevice,
+    // Cannot perform IO.
+    IO,
+    // Unexpected error.
+    Other
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

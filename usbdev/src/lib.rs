@@ -22,6 +22,7 @@ extern crate bit_field;
 mod error;
 mod descriptors;
 mod device;
+mod ioctl;
 
 pub use error::*;
 pub use descriptors::*;
