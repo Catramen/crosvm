@@ -4,9 +4,18 @@
 
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::os::unix::io::RawFd;
+use std::os::raw::{c_uint, c_int};
 
+use libc::ENODEV;
+
+use bindings;
+use ioctl::*;
 use error::*;
 use descriptors::*;
+use sys_util::{ioctl_with_val, ioctl_with_ref, ioctl_with_mut_ref, ioctl_with_ptr, ioctl_with_mut_ptr};
 
 const SYSFS_DEVICES_PATH: &str = "/sys/bus/usb/devices";
 
@@ -57,19 +66,15 @@ impl Interface {
     }
 }
 
-#[derive(Debug)]
-enum State {
-    // We got information of this device.
-    Info,
-    // We have opened the device.
-    Opened(File),
-    // We think the device is failed.
-    Failed,
-    // We think the device is already unplugged.
-    Unplugged,
-}
-
-#[derive(Debug)]
+/// Device is a USB device. It only contains device descriptors when it's built. After calling
+/// open with an File of usbfs node, user can perform more operations. If NoDevice error happens or
+/// the fd gets hang up, the device will invoke unplug callback and transfer to unplug state.
+///
+/// Device life cycle is very simple:
+///     Construct -> Open -> Unplug.
+///
+/// This device support submitting async transfers. It won't start it's own event loop to handle
+/// async events. User should poll on poll_fd() and invoke handle_events()
 pub struct Device {
     busnum: u8,
     devnum: u8,
@@ -77,9 +82,15 @@ pub struct Device {
     configs: Vec<Config>,
     // Path to the sysfs folder of this device.
     sysfs_dir: String,
-    state: State,
+    // The handle is None when the device is not opened.
+    handle: Option<File>,
+    // This atomic bool will be initialized to false. When we get a no device error or when the
+    // device handle is not valid, we will flip the bool and trigger unplug_cb.
+    unplugged: AtomicBool,
+    unplug_cb: Option<Box<Fn(&Device)>>,
 }
 
+// Implementation of device constructor.
 impl Device {
     pub fn device_list() -> Result<Vec<Device>> {
         let sysfs_path = Path::new(SYSFS_DEVICES_PATH);
@@ -101,52 +112,7 @@ impl Device {
         Ok(devices)
     }
 
-    pub fn set_unplug_callback() {
-    }
-
-    pub fn open(&mut self, fd: File) {
-        self.state = State::Opened(fd);
-    }
-
-    pub fn get_busnum(&self) -> u8 {
-        self.busnum
-    }
-
-    pub fn get_devnum(&self) -> u8 {
-        self.devnum
-    }
-
-    pub fn get_device_descriptor(&self) -> &DeviceDescriptor {
-        &self.device_desc
-    }
-
-    pub fn get_configs(&self) -> &[Config] {
-        self.configs.as_slice()
-    }
-
-    pub fn get_config_by_value(&self, cfg_val: u8) -> Option<&Config> {
-        for c in &self.configs {
-            if c.desc.get_configuration_value() == cfg_val {
-                return Some(&c);
-            }
-        }
-        None
-    }
-
-    pub fn get_active_config_value(&self) -> Result<u8> {
-        Self::read_and_parse(&self.sysfs_dir, "bConfigurationValue").ok_or(Error::IO)
-    }
-
-    pub fn get_active_config(&self) -> Result<&Config> {
-        let cfg_val = self.get_active_config_value()?;
-        self.get_config_by_value(cfg_val)
-            .ok_or_else(|| {
-                error!("cannot find config descriptor for current active config {}", cfg_val);
-                Error::Other
-            })
-    }
-
-    fn new(path: &PathBuf) -> Option<Device> {
+    pub fn new(path: &PathBuf) -> Option<Device> {
         let busnum = Self::read_busnum(path)?;
         let devnum = Self::read_devnum(path)?;
         let (device_desc, configs) = Self::read_descriptors(path)?;
@@ -156,7 +122,9 @@ impl Device {
             device_desc,
             configs,
             sysfs_dir: String::from(path.to_str()?),
-            state: State::Info
+            handle: None,
+            unplugged: AtomicBool::new(false),
+            unplug_cb: None,
         })
     }
 
@@ -246,5 +214,137 @@ impl Device {
     }
 }
 
+// Descriptor getters.
+impl Device {
+    pub fn open(&mut self, fd: File) {
+        self.handle = Some(fd);
+    }
 
+    pub fn get_busnum(&self) -> u8 {
+        self.busnum
+    }
 
+    pub fn get_devnum(&self) -> u8 {
+        self.devnum
+    }
+
+    pub fn get_device_descriptor(&self) -> &DeviceDescriptor {
+        &self.device_desc
+    }
+
+    pub fn get_configs(&self) -> &[Config] {
+        self.configs.as_slice()
+    }
+
+    pub fn get_config_by_value(&self, cfg_val: u8) -> Option<&Config> {
+        for c in &self.configs {
+            if c.desc.get_configuration_value() == cfg_val {
+                return Some(&c);
+            }
+        }
+        None
+    }
+
+    pub fn get_active_config_value(&self) -> Result<u8> {
+        Self::read_and_parse(&self.sysfs_dir, "bConfigurationValue").ok_or(Error::IO)
+    }
+
+    pub fn get_active_config(&self) -> Result<&Config> {
+        let cfg_val = self.get_active_config_value()?;
+        self.get_config_by_value(cfg_val)
+            .ok_or_else(|| {
+                error!("cannot find config descriptor for current active config {}", cfg_val);
+                Error::Other
+            })
+    }
+}
+
+// Usb control functions.
+impl Device {
+    fn get_handle(&self) -> Result<&File> {
+        // We always have if statement around unplugged, Ordering::Relaxed is good enough.
+        if self.unplugged.load(Ordering::Relaxed) {
+            return Err(Error::NoDevice);
+        }
+        let handle = self.handle.as_ref().ok_or(Error::NoDevice)?;
+        Ok(handle)
+    }
+
+    fn ioctl_result(r: c_int) -> Result<()> {
+        match r {
+            0 => Ok(()),
+            ENODEV => Err(Error::NoDevice),
+            _ => Err(Error::Other),
+        }
+    }
+
+    pub fn set_config(&self, cfg_num: u8) -> Result<()> {
+        let cfg_num = cfg_num as c_uint;
+        let r = unsafe {
+            ioctl_with_ref(self.get_handle()?, USBDEVFS_SETCONFIGURATION(), &cfg_num)
+        };
+        Self::ioctl_result(r)
+    }
+
+    pub fn set_interface_alt_setting(&self, if_num: u8, alt_setting: u8) -> Result<()> {
+        let setintf = bindings::usbdevfs_setinterface {
+            interface: if_num as c_uint,
+            altsetting: alt_setting as c_uint,
+        };
+        let r = unsafe {
+            ioctl_with_ref(self.get_handle()?, USBDEVFS_SETINTERFACE(), &setintf)
+        };
+        Self::ioctl_result(r)
+
+    }
+
+    pub fn clear_halt(&self, ep: u8) -> Result<()> {
+        let ep = ep as c_uint;
+        let r = unsafe {
+            ioctl_with_ref(self.get_handle()?, USBDEVFS_CLEAR_HALT(), &ep)
+        };
+        Self::ioctl_result(r)
+    }
+
+    pub fn claim_interface(&self, if_num: u8) -> Result<()> {
+        let if_num = if_num as c_uint;
+        let r = unsafe {
+            ioctl_with_ref(self.get_handle()?, USBDEVFS_CLAIMINTERFACE(), &if_num)
+        };
+        Self::ioctl_result(r)
+    }
+
+    pub fn release_interface(&self, if_num: u8) -> Result<()> {
+        let if_num = if_num as c_uint;
+        let r = unsafe {
+            ioctl_with_ref(self.get_handle()?, USBDEVFS_RELEASEINTERFACE(), &if_num)
+        };
+        Self::ioctl_result(r)
+    }
+
+    pub fn submit_transfer(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+// Event handling functions.
+impl Device {
+    pub fn set_unplug_callback<F: 'static + Fn(&Device)>(&mut self, f: F) {
+        self.unplug_cb = Some(Box::new(f));
+    }
+
+    fn unplug(&self) {
+        if !self.unplugged.swap(true, Ordering::Relaxed) {
+            if let Some(ref cb) = self.unplug_cb {
+                cb(self);
+            }
+        }
+    }
+
+    pub fn poll_fd(&self) -> RawFd {
+        0
+    }
+
+    pub fn handle_events(&self) {
+    }
+}

@@ -17,6 +17,7 @@ extern crate sync;
 extern crate sys_util;
 #[macro_use]
 extern crate bit_field;
+extern crate libc;
 
 #[macro_use]
 mod error;

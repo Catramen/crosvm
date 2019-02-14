@@ -7,7 +7,7 @@ pub enum Error {
     // Unable to access sysfs folders.
     UnableToAccess,
     // There is no such device.
-    NoSuchDevice,
+    NoDevice,
     // Cannot perform IO.
     IO,
     // Unexpected error.

@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["The Chromium OS Authors"]
 
 [dependencies]
+libc ="*"
 assertions = { path = "../assertions" }
 bit_field = { path = "../bit_field" }
 data_model = { path = "../data_model" }
