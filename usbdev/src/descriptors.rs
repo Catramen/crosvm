@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 use data_model::DataInit;
+use bit_field::*;
 
 /// Device descriptor size in bytes.
 const DEVICE_DESC_SIZE: usize = 18;
@@ -15,125 +16,120 @@ const EP_DESC_SIZE: usize = 7;
 /// Size of descriptor header.
 const DESC_HEADER_SIZE: usize = 2;
 
-const DEVICE_DESC_TYPE: u8 = 1;
-const CONFIG_DESC_TYPE: u8 = 2;
-const IF_DESC_TYPE: u8 = 4;
-const EP_DESC_TYPE: u8 = 5;
+pub const DEVICE_DESC_TYPE: u8 = 1;
+pub const CONFIG_DESC_TYPE: u8 = 2;
+pub const IF_DESC_TYPE: u8 = 4;
+pub const EP_DESC_TYPE: u8 = 5;
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[bitfield]
+#[derive(Copy, Clone, PartialEq)]
 pub struct DeviceDescriptor {
     /// Size of this descriptor in bytes.
-    pub length: u8,
+    length: BitField8,
     /// Descriptor type.
-    pub descriptor_type: u8,
+    descriptor_type: BitField8,
     /// USB specification release number in binary-coded decimal. A value of
     /// 0x0200 indicates USB 2.0, 0x0110 indicates USB 1.1, etc.
-    pub bcd_usb: u16,
+    bcd_usb: BitField16,
     /// USB-IF class code for the device.
-    pub device_class: u8,
+    device_class: BitField8,
     /// USB-IF subclass code for the device.
-    pub device_subclass: u8,
+    device_subclass: BitField8,
     /// USB-IF protocol code for the device.
-    pub device_protocol: u8,
+    device_protocol: BitField8,
     /// Maximum packet size for endpoint 0.
-    pub max_packet_size: u8,
+    max_packet_size: BitField8,
     /// USB-IF vendor ID.
-    pub id_vendor: u16,
+    id_vendor: BitField16,
     /// USB-IF product ID.
-    pub id_product: u16,
+    id_product: BitField16,
     /// Device release number in binary-coded decimal.
-    pub bcd_device: u16,
+    bcd_device: BitField16,
     /// Index of string descriptor describing manufacturer.
-    pub manufacturer_str_index: u8,
+    manufacturer_str_index: BitField8,
     /// Index of string descriptor describing product.
-    pub product_str_index: u8,
+    product_str_index: BitField8,
     /// Index of string descriptor containing device serial number.
-    pub serial_number_str_index: u8,
+    serial_number_str_index: BitField8,
     /// Number of possible configurations.
-    pub num_configs: u8,
+    num_configs: BitField8,
 }
 
 unsafe impl DataInit for DeviceDescriptor {}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[bitfield]
+#[derive(Copy, Clone, PartialEq)]
 pub struct ConfigDescriptor {
     /// Size of this descriptor in bytes.
-    pub length: u8,
+    length: BitField8,
     /// Descriptor type.
-    pub descriptor_type: u8,
+    descriptor_type: BitField8,
     /// Total length of data returned for this configuration.
-    pub total_length: u16,
+    total_length: BitField16,
     /// Number of interfaces supported by this configuration.
-    pub num_interfaces: u8,
+    num_interfaces: BitField8,
     /// Identifier value for this configuration.
-    pub configuration_value: u8,
+    configuration_value: BitField8,
     /// Index of string descriptor describing this configuration.
-    pub configuration_str_index: u8,
+    configuration_str_index: BitField8,
     /// Configuration characteristics.
-    pub attributes: u8,
+    attributes: BitField8,
     /// Maximum power consumption of the USB device from this bus in this
     /// configuration when the device is fully operation. Expressed in units
     /// of 2 mA when the device is operating in high-speed mode and in units
     /// of 8 mA when the device is operating in super-speed mode.
-    pub max_power: u8,
+    max_power: BitField8,
 }
 
 unsafe impl DataInit for ConfigDescriptor {}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[bitfield]
+#[derive(Copy, Clone, PartialEq)]
 pub struct InterfaceDescriptor {
     /// Size of this descriptor in bytes.
-    pub length: u8,
+    length: BitField8,
     /// Descriptor type.
-    pub descriptor_type: u8,
+    descriptor_type: BitField8,
     /// Number of this interface
-    pub interface_number: u8,
+    interface_number: BitField8,
     /// Value used to select this alternate setting for this interface
-    pub alternate_setting: u8,
+    alternate_setting: BitField8,
     /// Number of endpoints used by this interface (excluding the control
     /// endpoint).
-    pub num_endpoints: u8,
+    num_endpoints: BitField8,
     /// USB-IF class code for this interface.
-    pub interface_class: u8,
+    interface_class: BitField8,
     /// USB-IF subclass code for this interface, qualified by the
     /// interface_class value
-    pub interface_subclass: u8,
+    interface_subclass: BitField8,
     /// USB-IF protocol code for this interface, qualified by the
     /// interface_class and interface_subClass values
-    pub interface_protocol: u8,
+    interface_protocol: BitField8,
     /// Index of string descriptor describing this interface
-    pub interface: u8,
+    interface: BitField8,
 }
 
 unsafe impl DataInit for InterfaceDescriptor {}
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[bitfield]
+#[derive(Copy, Clone, PartialEq)]
 pub struct EndpointDescriptor {
     /// Size of this descriptor (in bytes)
-    pub length: u8,
+    length: BitField8,
     /// Descriptor type.
-    pub descriptor_type: u8,
+    descriptor_type: BitField8,
     /// The address of the endpoint described by this descriptor. Bits 0:3 are
     /// the endpoint number. Bits 4:6 are reserved. Bit 7 indicates direction,
-    pub endpoint_address: u8,
+    endpoint_address: BitField8,
     /// Attributes which apply to the endpoint when it is configured using
     /// the configuration_value. Bits 0:1 determine the transfer type. Bits 2:3
     /// are only used for isochronous endpoints. Bits 4:5 are also only used for
     /// isochronous endpoints. Bits 6:7 are reserved.
-    pub attributes: u8,
+    attributes: BitField8,
     /// Maximum packet size this endpoint is capable of sending/receiving.
-    pub max_packet_size: u16,
+    max_packet_size: BitField16,
     /// Interval for polling endpoint for data transfers.
-    pub interval: u8,
-    /// For audio devices only: the rate at which synchronization feedback
-    /// is provided.
-    pub refresh: u8,
-    /// For audio devices only: the address if the synch endpoint
-    pub synch_address: u8,
+    interval: BitField8,
 }
 
 unsafe impl DataInit for EndpointDescriptor {}
@@ -147,6 +143,27 @@ struct CommonDescriptorHeader {
 
 unsafe impl DataInit for CommonDescriptorHeader {}
 
+#[derive(PartialEq)]
+pub enum DescriptorType {
+    Device,
+    Config,
+    Interface,
+    Endpoint,
+    Other,
+}
+
+impl DescriptorType {
+    pub fn new(ty: u8) -> DescriptorType {
+        match ty {
+            DEVICE_DESC_TYPE => DescriptorType::Device,
+            CONFIG_DESC_TYPE => DescriptorType::Config,
+            IF_DESC_TYPE => DescriptorType::Interface,
+            EP_DESC_TYPE => DescriptorType::Endpoint,
+            _ => DescriptorType::Other
+        }
+    }
+}
+
 pub enum Descriptor {
     Device(DeviceDescriptor),
     Config(ConfigDescriptor),
@@ -154,15 +171,6 @@ pub enum Descriptor {
     Endpoint(EndpointDescriptor),
     /// Other unparsed descriptor.
     Other(Vec<u8>),
-}
-
-impl Descriptor {
-    pub fn parse(raw: Vec<u8>) -> DescriptorIter {
-        DescriptorIter {
-            raw,
-            position: 0,
-        }
-    }
 }
 
 pub struct DescriptorIter {
@@ -179,24 +187,40 @@ impl DescriptorIter {
         }
     }
 
-    fn read_descriptor<D: DataInit>(&mut self, len_in_header: u8) -> Option<D> {
-        let desc_size = std::mem::size_of::<D>();
-        if len_in_header as usize != desc_size {
-            error!("wrong descriptor size for descriptor");
-            return None;
-        }
-        let desc = D::copy_from_slice(
-            &self.raw[self.position..(self.position + desc_size)]
-        )?;
-        self.position += desc_size;
-        Some(desc)
+    /// Peek type of the next descriptor.
+    pub fn peek_desc_type(&mut self) -> Option<DescriptorType> {
+        let header = self.read_header()?;
+        Some(DescriptorType::new(header.descriptor_type))
     }
-}
 
-impl Iterator for DescriptorIter {
-    type Item = Descriptor;
+    pub fn read_next_interface_desc_in_this_config(&mut self) -> Option<InterfaceDescriptor> {
+        loop {
+            // We should not cross config descriptor boundary.
+            if self.peek_desc_type()? == DescriptorType::Config {
+                return None;
+            }
+            match self.next()? {
+                Descriptor::Interface(if_desc) => return Some(if_desc),
+                _ => {},
+            }
+        }
+    }
 
-    fn next(&mut self) -> Option<Descriptor> {
+    pub fn read_next_endpoint_desc_in_this_interface(&mut self) -> Option<EndpointDescriptor> {
+        loop {
+            match self.peek_desc_type()? {
+                DescriptorType::Config | DescriptorType::Interface => return None,
+                _ => {
+                    match self.next()? {
+                        Descriptor::Endpoint(ep_desc) => return Some(ep_desc),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn read_header(&mut self) -> Option<CommonDescriptorHeader> {
         if self.position + DESC_HEADER_SIZE > self.raw.len() {
             return None;
         }
@@ -207,7 +231,30 @@ impl Iterator for DescriptorIter {
             error!("raw descriptor size is not long enough");
             return None;
         }
+        Some(header)
+    }
 
+    fn read_descriptor<D: DataInit>(&mut self, len_in_header: u8) -> Option<D> {
+        let desc_size = std::mem::size_of::<D>();
+        // Descriptor might be longer than the bitfields defined in this lib.
+        if (len_in_header as usize) < desc_size {
+            error!("wrong descriptor size for descriptor");
+            return None;
+        }
+        let desc = D::copy_from_slice(
+            &self.raw[self.position..(self.position + desc_size)]
+        )?;
+        // Trust the length in header.
+        self.position += len_in_header as usize;
+        Some(desc)
+    }
+}
+
+impl Iterator for DescriptorIter {
+    type Item = Descriptor;
+
+    fn next(&mut self) -> Option<Descriptor> {
+        let header = self.read_header()?;
         match header.descriptor_type {
             DEVICE_DESC_TYPE => {
                 let desc: DeviceDescriptor = self.read_descriptor(header.length)?;
@@ -236,6 +283,7 @@ impl Iterator for DescriptorIter {
 }
 
 mod tests {
+    use super::*;
     #[test]
     fn descriptor_sizes() {
         assert_eq!(std::mem::size_of::<DeviceDescriptor>(), DEVICE_DESC_SIZE);

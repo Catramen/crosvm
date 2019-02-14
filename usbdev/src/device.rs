@@ -17,9 +17,31 @@ pub struct Config {
 }
 
 #[derive(Debug)]
-pub struct Interface {
+pub struct InterfaceAltSetting {
     pub desc: InterfaceDescriptor,
     pub endpoints: Vec<EndpointDescriptor>,
+}
+
+impl InterfaceAltSetting {
+    fn read_from(iter: &mut DescriptorIter) -> Option<InterfaceAltSetting> {
+        let interface_desc = iter.read_next_interface_desc_in_this_config()?;
+
+        // Read all endpoint descriptors of this interface.
+        let mut endpoints = vec![];
+        for _ in 0..interface_desc.get_num_endpoints() {
+            let endpoint_desc =  iter.read_next_endpoint_desc_in_this_interface()?;
+            endpoints.push(endpoint_desc);
+        }
+        Some(InterfaceAltSetting {
+            desc: interface_desc,
+            endpoints,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct Interface {
+    pub alt_settings: Vec<InterfaceAltSetting>,
 }
 
 #[derive(Debug)]
@@ -69,14 +91,14 @@ impl Device {
     fn read_busnum(path: &PathBuf) -> Option<u8> {
         let mut busnum_path = path.clone();
         busnum_path.push("busnum");
-        let busnum: u8 = fs::read_to_string(busnum_path).ok()?.parse().ok()?;
+        let busnum: u8 = fs::read_to_string(busnum_path).ok()?.trim().parse().ok()?;
         Some(busnum)
     }
 
     fn read_devnum(path: &PathBuf) -> Option<u8> {
         let mut devnum_path = path.clone();
         devnum_path.push("devnum");
-        let devnum: u8 = fs::read_to_string(devnum_path).ok()?.parse().ok()?;
+        let devnum: u8 = fs::read_to_string(devnum_path).ok()?.trim().parse().ok()?;
         Some(devnum)
     }
 
@@ -84,6 +106,7 @@ impl Device {
         let mut desc_path = path.clone();
         desc_path.push("descriptors");
         let raw_desc = fs::read(desc_path).ok()?;
+
         let mut iter = DescriptorIter::new(raw_desc);
         // First descriptor is device descriptor.
         let device_desc = match iter.next()? {
@@ -94,33 +117,55 @@ impl Device {
             }
         };
 
-        // The following nested loop will grap the next expected descriptor, skip unexpected ones.
+        // The following outer loop will grap the next config descriptor, skip unexpected ones.
+        // Thus inner loop is bounded by config descriptors.
         let mut configs: Vec<Config> = vec![];
-        for _ in 0..device_desc.num_configs {
+        for _ in 0..device_desc.get_num_configs() {
             let config_desc = match iter.next()? {
                 Descriptor::Config(d) => d,
                 _ => continue,
             };
             let mut interfaces: Vec<Interface> = vec![];
-            for _ in 0..config_desc.num_interfaces {
-                let interface_desc = match iter.next()? {
-                    Descriptor::Interface(d) => d,
-                    _ => continue,
+
+            // The following loop group interface_descriptors into alt_settings by interface_num.
+            let mut cur_interface_num: i16 = -1;
+            let mut alt_settings = vec![];
+            loop {
+                // Try to read next alt_settings.
+                let alt_setting = match InterfaceAltSetting::read_from(&mut iter) {
+                    Some(a) => a,
+                    None => {
+                        // There is no more alt settings, push the last one.
+                        interfaces.push(Interface {
+                            alt_settings,
+                        });
+                        break;
+                    }
                 };
 
-                let mut endpoints = vec![];
-                for _ in 0..interface_desc.num_endpoints {
-                    let endpoint_desc = match iter.next()? {
-                        Descriptor::Endpoint(d) => d,
-                        _ => continue,
-                    };
-                    endpoints.push(endpoint_desc);
+                // Init cur_interface_num when we meet the first interface descriptor.
+                if cur_interface_num == -1 {
+                    cur_interface_num = alt_setting.desc.get_interface_number() as i16;
                 }
-                interfaces.push(Interface {
-                    desc: interface_desc,
-                    endpoints,
-                });
+
+                // If it is the same interface_num, it's in the same alt_settings set.
+                if cur_interface_num == alt_setting.desc.get_interface_number() as i16 {
+                    alt_settings.push(alt_setting);
+                } else {
+                    // If it is a new interface_num, we creat a new set of alt_settings and push
+                    // the older one into interfaces.
+                    cur_interface_num = alt_setting.desc.get_interface_number() as i16;
+                    let mut tmp = vec![];
+                    std::mem::swap(&mut tmp, &mut alt_settings);
+                    alt_settings.push(alt_setting);
+
+                    let interface = Interface {
+                        alt_settings: tmp,
+                    };
+                    interfaces.push(interface);
+                }
             }
+
             configs.push(Config {
                 desc: config_desc,
                 interfaces
