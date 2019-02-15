@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+use assertions::const_assert;
+
 use data_model::DataInit;
 use bit_field::*;
 
@@ -282,15 +284,11 @@ impl Iterator for DescriptorIter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn descriptor_sizes() {
-        assert_eq!(std::mem::size_of::<DeviceDescriptor>(), DEVICE_DESC_SIZE);
-        assert_eq!(std::mem::size_of::<ConfigDescriptor>(), CONFIG_DESC_SIZE);
-        assert_eq!(std::mem::size_of::<InterfaceDescriptor>(), IF_DESC_SIZE);
-        assert_eq!(std::mem::size_of::<EndpointDescriptor>(), EP_DESC_SIZE);
-        assert_eq!(std::mem::size_of::<CommonDescriptorHeader>(), DESC_HEADER_SIZE);
-    }
+
+fn _assert() {
+    const_assert!(std::mem::size_of::<DeviceDescriptor>() == DEVICE_DESC_SIZE);
+    const_assert!(std::mem::size_of::<ConfigDescriptor>() == CONFIG_DESC_SIZE);
+    const_assert!(std::mem::size_of::<InterfaceDescriptor>() == IF_DESC_SIZE);
+    const_assert!(std::mem::size_of::<EndpointDescriptor>() == EP_DESC_SIZE);
+    const_assert!(std::mem::size_of::<CommonDescriptorHeader>() == DESC_HEADER_SIZE);
 }

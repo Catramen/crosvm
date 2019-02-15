@@ -1,7 +1,6 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-// Generated with bindgen usbdevice_fs.h -no-prepend-enum-name -o bindings.rs.
 
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
@@ -24,6 +23,7 @@ mod error;
 mod descriptors;
 mod device;
 mod ioctl;
+mod types;
 
 pub use error::*;
 pub use descriptors::*;
